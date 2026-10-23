@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_contact'])) {
             ESTUDIO &middot; CONSTRUCTORA &middot; DISEÑO
         </span>
         <h1 class="hero-title" style="max-width: 900px; margin: 0 auto 1.5rem;">
-            Espacios que trascienden.<br>Precisión en cada detalle.
+            Hola mundo.<br>Pagina web G10Obra.
         </h1>
         <p class="hero-subtitle">
             Desarrollo integral de proyectos arquitectónicos, dirección técnica y ejecución de obras con los más altos estándares constructivos y materialidad noble.
