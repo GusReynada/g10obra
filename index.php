@@ -264,16 +264,16 @@ if (!empty($currentUser['nombre'])) {
             font-weight: 600;
             padding: 0.35rem 0.75rem;
             border-radius: 999px;
-            background: hsla(152, 60%, 50%, 0.12);
-            color: hsl(152, 70%, 55%);
-            border: 1px solid hsla(152, 60%, 50%, 0.25);
+            background: rgba(255, 255, 255, 0.08);
+            color: #f4f4f5;
+            border: 1px solid rgba(255, 255, 255, 0.20);
         }
         .status-badge .dot {
             width: 7px;
             height: 7px;
             border-radius: 50%;
-            background: hsl(152, 70%, 55%);
-            box-shadow: 0 0 10px hsl(152, 70%, 55%);
+            background: #ffffff;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
         }
         .info-box {
             background: var(--surface);
@@ -403,7 +403,7 @@ if (!empty($currentUser['nombre'])) {
             <!-- Caja de confirmación de estado -->
             <section class="info-box">
                 <h2>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent);"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #ffffff;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                     Acceso y Autenticación Completados
                 </h2>
                 <p>
