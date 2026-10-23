@@ -334,11 +334,21 @@ if (!empty($currentUser['nombre'])) {
                 <p>Aqui podras gestionar las obras, sus partidas, insumos y modulos.</p>
             </div>
 
+            <br>
+            <br>
+            <br>
+            <br>
+
             <!-- Espacio para Obras Activas -->
             <div>
                 <h2>Obras Activas</h2>
                 <p>Lista de obras activas.</p>
             </div>
+
+            <br>
+            <br>
+            <br>
+            <br>
 
             <!-- Módulos del Sistema -->
             <h2 style="font-size: 1.15rem; font-weight: 700; margin-top: 2rem;">Módulos del Sistema</h2>
