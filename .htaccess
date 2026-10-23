@@ -5,10 +5,15 @@ ServerSignature Off
 # Codificación de caracteres predeterminada
 AddDefaultCharset UTF-8
 
-# Seguridad básica: Proteger archivos de configuración y base de datos
-<FilesMatch "^(schema\.sql|\.env|composer\.json|composer\.lock)$">
-    Order allow,deny
-    Deny from all
+# Seguridad: Proteger archivos sensibles, credenciales y módulos internos
+<FilesMatch "^(schema\.sql|\.env|composer\.json|composer\.lock|.*\.local\.php|crypto\.php|auth\.php)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
 </FilesMatch>
 
 # Habilitar compresión Gzip para mayor velocidad

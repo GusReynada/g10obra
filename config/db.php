@@ -4,13 +4,19 @@
  * Compatible with Localhost (XAMPP / Laragon / Wamp) and Hostinger cPanel / hPanel
  */
 
+// Credenciales privadas: config/db.local.php (NO se sube a GitHub, ver .gitignore)
+// Si existe, define DB_HOST, DB_NAME, DB_USER y DB_PASS antes de los valores por defecto.
+if (file_exists(__DIR__ . '/db.local.php')) {
+    require_once __DIR__ . '/db.local.php';
+}
+
 // Hostinger / Local Database Credentials
 // Actualiza estos valores con los que te proporcione Hostinger en su panel MySQL:
-define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
-define('DB_NAME', getenv('DB_NAME') ?: 'g10obra_db');
-define('DB_USER', getenv('DB_USER') ?: 'root');
-define('DB_PASS', getenv('DB_PASS') ?: '');
-define('DB_CHARSET', 'utf8mb4');
+defined('DB_HOST') || define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+defined('DB_NAME') || define('DB_NAME', getenv('DB_NAME') ?: 'g10obra_db');
+defined('DB_USER') || define('DB_USER', getenv('DB_USER') ?: 'root');
+defined('DB_PASS') || define('DB_PASS', getenv('DB_PASS') ?: '');
+defined('DB_CHARSET') || define('DB_CHARSET', 'utf8mb4');
 
 class Database {
     private static ?PDO $instance = null;

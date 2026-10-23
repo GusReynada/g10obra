@@ -1,0 +1,3 @@
+# Credenciales privadas (nunca subir a GitHub)
+config/db.local.php
+.env
