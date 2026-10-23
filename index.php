@@ -336,7 +336,7 @@ if (!empty($currentUser['nombre'])) {
                     </div>
                     <span style="font-size: 0.8rem; color: var(--subtle);">Nivel de acceso: <?= (int)$currentUser['nivel'] ?></span>
                 </div>
-                <h1>Bienvenido, <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
+                <h1>Bienvenido!, <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
                 <p>Sesión activa mediante tabla <code>usuarios</code>. Tu sistema está listo para gestionar las 9 tablas de la base de datos.</p>
             </div>
 
