@@ -11,11 +11,12 @@ if (file_exists(__DIR__ . '/db.local.php')) {
 }
 
 // Hostinger / Local Database Credentials
-// Actualiza estos valores con los que te proporcione Hostinger en su panel MySQL:
+// Por defecto se conecta a la base de datos de producción en Hostinger (localhost).
+// En tu PC local, config/db.local.php (ignorado por git) sobreescribe DB_HOST con el host remoto.
 defined('DB_HOST') || define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
-defined('DB_NAME') || define('DB_NAME', getenv('DB_NAME') ?: 'g10obra_db');
-defined('DB_USER') || define('DB_USER', getenv('DB_USER') ?: 'root');
-defined('DB_PASS') || define('DB_PASS', getenv('DB_PASS') ?: '');
+defined('DB_NAME') || define('DB_NAME', getenv('DB_NAME') ?: 'u907704195_g10obra');
+defined('DB_USER') || define('DB_USER', getenv('DB_USER') ?: 'u907704195_docker');
+defined('DB_PASS') || define('DB_PASS', getenv('DB_PASS') ?: 'CafeNegro5');
 defined('DB_CHARSET') || define('DB_CHARSET', 'utf8mb4');
 
 class Database {

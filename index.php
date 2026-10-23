@@ -164,9 +164,7 @@ if (!$currentUser):
         form.addEventListener('submit', () => {
             if (form.checkValidity()) {
                 submitBtn.classList.add('loading');
-                submitBtn.disabled = true;
-                submitBtn.style.opacity = '0.8';
-                form.submit();
+                submitBtn.style.opacity = '0.85';
             }
         });
     </script>
