@@ -200,6 +200,42 @@ if ($db) {
     }
 }
 
+// Cargar foto de perfil del usuario (si existe en usuarios.UsuFoto)
+$userPhotoData = null;
+if ($db && !empty($currentUser['id'])) {
+    try {
+        $stFoto = $db->prepare("SELECT UsuFoto FROM usuarios WHERE idUsuario = ? LIMIT 1");
+        $stFoto->execute([$currentUser['id']]);
+        $blobFoto = $stFoto->fetchColumn();
+        if ($blobFoto) {
+            $mime = 'image/jpeg';
+            if (str_starts_with($blobFoto, "\x89PNG")) {
+                $mime = 'image/png';
+            } elseif (str_starts_with($blobFoto, "GIF8")) {
+                $mime = 'image/gif';
+            } elseif (str_starts_with($blobFoto, "RIFF") && substr($blobFoto, 8, 4) === "WEBP") {
+                $mime = 'image/webp';
+            }
+            $userPhotoData = 'data:' . $mime . ';base64,' . base64_encode($blobFoto);
+        }
+    } catch (Exception $e) {}
+}
+
+// Consultar obras activas
+$obrasActivas = [];
+if ($db) {
+    try {
+        $stObras = $db->query("SELECT * FROM obra WHERE obrStatus = 'A' OR obrStatus IS NULL OR obrStatus = '' ORDER BY idObra DESC");
+        $obrasActivas = $stObras->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $obrasActivas = [];
+    }
+}
+
+// Mensaje de éxito tras registrar obra
+$flashSuccess = $_SESSION['flash_success'] ?? null;
+unset($_SESSION['flash_success']);
+
 // Iniciales del usuario para el avatar
 $initials = 'U';
 if (!empty($currentUser['nombre'])) {
@@ -275,26 +311,165 @@ if (!empty($currentUser['nombre'])) {
             background: #ffffff;
             box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
         }
-        .info-box {
+        /* Avatar con foto o iniciales muy coloridas */
+        .avatar-img {
+            object-fit: cover;
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        .avatar.avatar-colorful {
+            background: linear-gradient(135deg, #ff007f 0%, #7928ca 30%, #0070f3 65%, #00dfd8 100%);
+            color: #ffffff;
+            font-weight: 800;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 0 20px rgba(121, 40, 202, 0.45), 0 4px 10px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+        }
+
+        /* Sección Obras Activas */
+        .obras-section {
+            margin: 2rem 0;
+        }
+        .section-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 1.25rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .empty-obras-card {
+            background: var(--surface);
+            border: 1px dashed var(--border-strong);
+            border-radius: var(--radius);
+            padding: 3.5rem 1.5rem;
+            text-align: center;
+            backdrop-filter: blur(14px);
+        }
+        .empty-icon-wrap {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            display: grid;
+            place-items: center;
+            margin: 0 auto 1.25rem;
+            color: var(--muted);
+        }
+        .obras-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.35rem;
+        }
+        .obra-card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 1.75rem;
-            margin-top: 2rem;
+            overflow: hidden;
             backdrop-filter: blur(14px);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.25s var(--ease), border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
         }
-        .info-box h2 {
+        .obra-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(255, 255, 255, 0.35);
+            box-shadow: 0 16px 36px -15px rgba(0, 0, 0, 0.7);
+        }
+        .obra-card-cover {
+            position: relative;
+            height: 160px;
+            background: #18181b;
+            overflow: hidden;
+        }
+        .obra-card-cover img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.4s var(--ease);
+        }
+        .obra-card:hover .obra-card-cover img {
+            transform: scale(1.05);
+        }
+        .obra-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            padding: 0.25rem 0.65rem;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            backdrop-filter: blur(8px);
+        }
+        .obra-card-cover .obra-status-pill {
+            position: absolute;
+            top: 0.85rem;
+            right: 0.85rem;
+        }
+        .obra-card-body {
+            padding: 1.35rem;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+        .obra-contract-tag {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.25rem 0.55rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            letter-spacing: 0.03em;
+        }
+        .obra-title {
             font-size: 1.15rem;
             font-weight: 700;
-            margin-bottom: 0.6rem;
+            color: #ffffff;
+            line-height: 1.35;
+            margin: 0.4rem 0 0.5rem;
+        }
+        .obra-loc {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-        }
-        .info-box p {
+            gap: 0.4rem;
+            font-size: 0.82rem;
             color: var(--muted);
-            font-size: 0.9rem;
-            line-height: 1.55;
+            margin-bottom: 1.1rem;
+        }
+        .obra-meta-grid {
+            margin-top: auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.82rem;
+        }
+        .obra-meta-grid .lbl {
+            display: block;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            color: var(--subtle);
+            letter-spacing: 0.04em;
+            margin-bottom: 0.15rem;
+        }
+        .obra-meta-grid .val {
+            font-weight: 600;
+            color: #d4d4d8;
+        }
+        .obra-meta-grid .val.bold {
+            font-weight: 700;
+            color: #ffffff;
+            font-size: 0.95rem;
         }
     </style>
 </head>
@@ -314,7 +489,11 @@ if (!empty($currentUser['nombre'])) {
             </div>
 
             <div class="user-chip">
-                <div class="avatar" aria-hidden="true"><?= htmlspecialchars($initials) ?></div>
+                <?php if (!empty($userPhotoData)): ?>
+                    <img src="<?= $userPhotoData ?>" class="avatar avatar-img" alt="Foto de <?= htmlspecialchars($currentUser['nombre']) ?>">
+                <?php else: ?>
+                    <div class="avatar avatar-colorful" aria-hidden="true"><?= htmlspecialchars($initials) ?></div>
+                <?php endif; ?>
                 <div class="user-meta">
                     <strong><?= htmlspecialchars($currentUser['nombre']) ?></strong>
                     <span><?= htmlspecialchars($currentUser['login']) ?></span>
@@ -334,33 +513,119 @@ if (!empty($currentUser['nombre'])) {
                 <p>Aqui podras gestionar las obras, sus partidas, insumos y modulos.</p>
             </div>
 
-            <br>
-            <br>
-            <br>
-            <br>
+            <?php if (!empty($flashSuccess)): ?>
+                <div class="alert alert-info" style="margin-top: 1.5rem; margin-bottom: 1.5rem; background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.3); color: #ffffff;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    <span><?= htmlspecialchars($flashSuccess) ?></span>
+                </div>
+            <?php endif; ?>
 
-            <!-- Espacio para Obras Activas -->
-            <div>
-                <h2>Obras Activas</h2>
-                <p>Lista de obras activas.</p>
-            </div>
+            <!-- Sección de Obras Activas -->
+            <section class="obras-section" id="obras-activas">
+                <div class="section-header-row">
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.65rem;">
+                            <h2 style="font-size: 1.4rem; font-weight: 700; color: #ffffff;">Obras Activas</h2>
+                            <span class="badge" style="position: static; font-size: 0.72rem; padding: 0.2rem 0.6rem;"><?= count($obrasActivas) ?></span>
+                        </div>
+                        <p style="color: var(--muted); font-size: 0.88rem; margin-top: 0.35rem;">Proyectos vigentes y su desglose presupuestal.</p>
+                    </div>
 
-            <br>
-            <br>
-            <br>
-            <br>
+                    <a href="nueva_obra.php" class="btn btn-primary" style="width: auto; padding: 0.65rem 1.35rem; font-size: 0.88rem;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        <span>Registrar nueva obra</span>
+                    </a>
+                </div>
+
+                <?php if (empty($obrasActivas)): ?>
+                    <div class="empty-obras-card">
+                        <div class="empty-icon-wrap">
+                            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                        </div>
+                        <h3 style="font-size: 1.15rem; font-weight: 700; color: #ffffff; margin-bottom: 0.45rem;">Todavia no tienes obras activas</h3>
+                        <p style="color: var(--muted); font-size: 0.88rem; max-width: 460px; margin: 0 auto 1.35rem; line-height: 1.55;">
+                            Registra tu primera obra para gestionar contratos, presupuestos, asignación de partidas y catálogo de insumos.
+                        </p>
+                        <a href="nueva_obra.php" class="btn btn-primary" style="width: auto; padding: 0.75rem 1.6rem; font-size: 0.9rem;">
+                            <span>Registrar nueva obra &rarr;</span>
+                        </a>
+                    </div>
+                <?php else: ?>
+                    <div class="obras-grid">
+                        <?php foreach ($obrasActivas as $obra): ?>
+                            <?php
+                                $obraFotoData = null;
+                                $blobObra = $obra['obrFotoMiniatura'] ?: $obra['obrFoto'];
+                                if (!empty($blobObra)) {
+                                    $mime = 'image/jpeg';
+                                    if (str_starts_with($blobObra, "\x89PNG")) $mime = 'image/png';
+                                    elseif (str_starts_with($blobObra, "GIF8")) $mime = 'image/gif';
+                                    elseif (str_starts_with($blobObra, "RIFF") && substr($blobObra, 8, 4) === "WEBP") $mime = 'image/webp';
+                                    $obraFotoData = 'data:' . $mime . ';base64,' . base64_encode($blobObra);
+                                }
+                                $montoTotal = ($obra['obrMontoSinIva'] ?? 0) + ($obra['obrIva'] ?? 0) - ($obra['obrRetencion'] ?? 0);
+                            ?>
+                            <article class="obra-card">
+                                <?php if ($obraFotoData): ?>
+                                    <div class="obra-card-cover">
+                                        <img src="<?= $obraFotoData ?>" alt="<?= htmlspecialchars($obra['obrNombreObra']) ?>">
+                                        <span class="obra-status-pill">Activa</span>
+                                    </div>
+                                <?php endif; ?>
+
+                                <div class="obra-card-body">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                        <span class="obra-contract-tag"><?= htmlspecialchars($obra['obrContrato'] ?: 'S/N CONTRATO') ?></span>
+                                        <?php if (!$obraFotoData): ?>
+                                            <span class="obra-status-pill">Activa</span>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <h3 class="obra-title"><?= htmlspecialchars($obra['obrNombreObra']) ?></h3>
+
+                                    <?php if (!empty($obra['obrUbicacion'])): ?>
+                                        <p class="obra-loc">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                            <span><?= htmlspecialchars($obra['obrUbicacion']) ?></span>
+                                        </p>
+                                    <?php endif; ?>
+
+                                    <div class="obra-meta-grid">
+                                        <div>
+                                            <span class="lbl">Monto Sin IVA</span>
+                                            <span class="val">$<?= number_format((float)($obra['obrMontoSinIva'] ?? 0), 2) ?></span>
+                                        </div>
+                                        <div>
+                                            <span class="lbl">Total Neto</span>
+                                            <span class="val bold">$<?= number_format((float)$montoTotal, 2) ?></span>
+                                        </div>
+                                        <div>
+                                            <span class="lbl">Fecha Inicio</span>
+                                            <span class="val"><?= !empty($obra['obrFechaInicio']) ? date('d/m/Y', strtotime($obra['obrFechaInicio'])) : 'S/F' ?></span>
+                                        </div>
+                                        <div>
+                                            <span class="lbl">Ejercicio</span>
+                                            <span class="val"><?= htmlspecialchars($obra['obrEjercicioFiscal'] ?: date('Y')) ?></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </article>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </section>
 
             <!-- Módulos del Sistema -->
             <h2 style="font-size: 1.15rem; font-weight: 700; margin-top: 2rem;">Módulos del Sistema</h2>
             <div class="modules">
-                <div class="module">
-                    <span class="badge">Siguiente paso</span>
+                <a href="nueva_obra.php" class="module" style="display: block;">
+                    <span class="badge" style="background: rgba(255, 255, 255, 0.12); color: #ffffff;">+ Registrar</span>
                     <div class="m-icon">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
                     </div>
                     <h3>Gestión de Obras</h3>
                     <p>Tabla <code>obra</code>. Alta, edición, cálculo de IVA, retención, montos y estatus de obras.</p>
-                </div>
+                </a>
 
                 <div class="module">
                     <span class="badge">Pendiente</span>
