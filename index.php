@@ -329,38 +329,18 @@ if (!empty($currentUser['nombre'])) {
         <!-- Contenido Principal -->
         <main class="content">
             <div class="hero">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.5rem;">
-                    <div class="status-badge">
-                        <span class="dot"></span>
-                        <span>Hostinger MySQL Conectado &middot; <?= htmlspecialchars(DB_NAME) ?></span>
-                    </div>
-                    <span style="font-size: 0.8rem; color: var(--subtle);">Nivel de acceso: <?= (int)$currentUser['nivel'] ?></span>
-                </div>
-                <h1>Bienvenido!, <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
-                <p>Sesión activa mediante tabla <code>usuarios</code>. Tu sistema está listo para gestionar las 9 tablas de la base de datos.</p>
+                
+                <h1>Bienvenido, <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
+                <p>Aqui podras gestionar las obras, sus partidas, insumos y modulos.</p>
             </div>
 
-            <!-- Métricas rápidas de las tablas activas -->
-            <section class="stats-grid" aria-label="Métricas del sistema">
-                <div class="stat-card">
-                    <span class="label">Obras Registradas</span>
-                    <span class="num"><?= $stats['obras'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="label">Partidas de Obra</span>
-                    <span class="num"><?= $stats['partidas'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="label">Insumos en Catálogo</span>
-                    <span class="num"><?= $stats['insumos'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="label">Módulos Asignados</span>
-                    <span class="num"><?= $stats['modulos'] ?></span>
-                </div>
-            </section>
+            <!-- Espacio para Obras Activas -->
+            <div>
+                <h2>Obras Activas</h2>
+                <p>Lista de obras activas.</p>
+            </div>
 
-            <!-- Módulos de trabajo pendientes según la hoja de ruta -->
+            <!-- Módulos del Sistema -->
             <h2 style="font-size: 1.15rem; font-weight: 700; margin-top: 2rem;">Módulos del Sistema</h2>
             <div class="modules">
                 <div class="module">
@@ -400,17 +380,7 @@ if (!empty($currentUser['nombre'])) {
                 </div>
             </div>
 
-            <!-- Caja de confirmación de estado -->
-            <section class="info-box">
-                <h2>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #ffffff;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                    Acceso y Autenticación Completados
-                </h2>
-                <p>
-                    El sistema está configurado para que al ingresar al dominio aparezca directamente la pantalla de inicio de sesión.
-                    Las credenciales son validadas en tiempo real contra la base de datos de Hostinger usando tu usuario o correo electrónico y la contraseña correspondiente.
-                </p>
-            </section>
+           
         </main>
     </div>
 </body>
