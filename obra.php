@@ -271,6 +271,7 @@ $csrf = csrf_token();
         .partida-card {
             position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
             padding: 1.3rem 1.3rem 1.1rem; backdrop-filter: blur(14px); display: flex; flex-direction: column;
+            text-decoration: none; color: inherit; cursor: pointer;
             transition: transform .25s var(--ease), border-color .25s var(--ease), box-shadow .25s var(--ease);
             animation: rise .45s var(--ease) both;
         }
@@ -278,8 +279,10 @@ $csrf = csrf_token();
             content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; border-radius: var(--radius) var(--radius) 0 0;
             background: linear-gradient(90deg, #ff007f, #7928ca, #0070f3, #00dfd8); opacity: 0; transition: opacity .25s var(--ease);
         }
-        .partida-card:hover { transform: translateY(-3px); border-color: rgba(255,255,255,.3); box-shadow: 0 16px 36px -15px rgba(0,0,0,.7); }
+        .partida-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,.35); box-shadow: 0 20px 40px -15px rgba(0,0,0,.8); }
         .partida-card:hover::before { opacity: 1; }
+        .partida-card:hover .card-arrow { color: #fff !important; transform: translateX(3px); }
+        .card-arrow { transition: color .2s var(--ease), transform .2s var(--ease); }
         .partida-clave { font-family: 'Outfit', sans-serif; font-size: .78rem; font-weight: 800; letter-spacing: .06em; color: #fff; background: rgba(255,255,255,.08); border: 1px solid var(--border-strong); padding: .28rem .65rem; border-radius: 7px; }
         .partida-desc { font-size: 1rem; font-weight: 600; color: #f4f4f5; line-height: 1.45; margin: .85rem 0 1rem; flex: 1; }
         .partida-dates { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; padding: .8rem; border-radius: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--border); font-size: .82rem; }
@@ -531,8 +534,9 @@ $csrf = csrf_token();
                                     $dias = (new DateTime($p['pdoFechaInicio']))->diff(new DateTime($p['pdoFechaFin']))->days + 1;
                                 }
                             ?>
-                                <article class="partida-card" style="animation-delay: <?= min($i, 12) * 40 ?>ms"
-                                         data-search="<?= htmlspecialchars(mb_strtolower(($p['pdoClave'] ?? '') . ' ' . ($p['pdoDescripcion'] ?? ''))) ?>">
+                                <a href="partida.php?id=<?= (int)$p['idPartidaObra'] ?>" class="partida-card" style="animation-delay: <?= min($i, 12) * 40 ?>ms"
+                                   data-search="<?= htmlspecialchars(mb_strtolower(($p['pdoClave'] ?? '') . ' ' . ($p['pdoDescripcion'] ?? ''))) ?>"
+                                   title="Ver detalles e insumos de la partida <?= htmlspecialchars($p['pdoClave'] ?? '') ?>">
                                     <div style="display: flex; justify-content: space-between; align-items: center; gap: .5rem;">
                                         <span class="partida-clave"><?= htmlspecialchars($p['pdoClave'] ?: 'S/C') ?></span>
                                         <span class="tag"><?= (int)$p['totalInsumos'] ?> insumo<?= (int)$p['totalInsumos'] === 1 ? '' : 's' ?></span>
@@ -542,36 +546,18 @@ $csrf = csrf_token();
                                         <div><span class="lbl">Inicio</span><span class="val"><?= fmt_date($p['pdoFechaInicio']) ?></span></div>
                                         <div><span class="lbl">Fin</span><span class="val"><?= fmt_date($p['pdoFechaFin']) ?></span></div>
                                     </div>
-                                    <?php if ($dias): ?>
-                                        <span class="partida-duration">Duración: <?= $dias ?> día<?= $dias === 1 ? '' : 's' ?></span>
-                                    <?php endif; ?>
-                                    <div class="partida-actions">
-                                        <a class="act-btn" href="partida_insumos.php?id=<?= (int)$p['idPartidaObra'] ?>" title="Ver insumos de la partida">
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                                            Insumos <span class="count-badge"><?= (int)$p['totalInsumos'] ?></span>
-                                        </a>
-                                        <?php if ($perm['modificar']): ?>
-                                            <button type="button" class="act-btn js-editar" title="Editar partida"
-                                                data-id="<?= (int)$p['idPartidaObra'] ?>"
-                                                data-clave="<?= htmlspecialchars($p['pdoClave'] ?? '') ?>"
-                                                data-desc="<?= htmlspecialchars($p['pdoDescripcion'] ?? '') ?>"
-                                                data-ini="<?= htmlspecialchars($p['pdoFechaInicio'] ?? '') ?>"
-                                                data-fin="<?= htmlspecialchars($p['pdoFechaFin'] ?? '') ?>">
-                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                                                Editar
-                                            </button>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--border);">
+                                        <?php if ($dias): ?>
+                                            <span class="partida-duration" style="margin-top: 0;">Duración: <?= $dias ?> día<?= $dias === 1 ? '' : 's' ?></span>
+                                        <?php else: ?>
+                                            <span></span>
                                         <?php endif; ?>
-                                        <?php if ($perm['eliminar']): ?>
-                                            <button type="button" class="act-btn danger js-eliminar" title="Eliminar partida"
-                                                data-id="<?= (int)$p['idPartidaObra'] ?>"
-                                                data-clave="<?= htmlspecialchars($p['pdoClave'] ?? '') ?>"
-                                                data-insumos="<?= (int)$p['totalInsumos'] ?>">
-                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                                                Eliminar
-                                            </button>
-                                        <?php endif; ?>
+                                        <span class="card-arrow" style="font-size: .8rem; font-weight: 600; color: #a1a1aa; display: inline-flex; align-items: center; gap: .3rem;">
+                                            Ver insumos
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+                                        </span>
                                     </div>
-                                </article>
+                                </a>
                             <?php endforeach; ?>
                         </div>
                         <p class="no-results" id="noResults">No se encontraron partidas con ese criterio.</p>
