@@ -46,9 +46,24 @@ $idObra = (int)$partida['idObra'];
 // ---------------------------------------------------------------------------
 if (isset($_GET['ver_foto'])) {
     $idFotoVer = (int)$_GET['ver_foto'];
+    $esMiniatura = isset($_GET['thumb']) && $_GET['thumb'] === '1';
     if ($idFotoVer > 0) {
         try {
-            $stF = $db->prepare("SELECT pdfFoto FROM obrapartidasfotos WHERE idPartidaFoto = ? AND idPartidaObra = ? LIMIT 1");
+            if ($esMiniatura) {
+                $stF = $db->prepare(
+                    "SELECT COALESCE(pdfFotoMiniatura, pdfFoto) AS foto
+                       FROM obrapartidasfotos
+                      WHERE idPartidaFoto = ? AND idPartidaObra = ?
+                      LIMIT 1"
+                );
+            } else {
+                $stF = $db->prepare(
+                    "SELECT pdfFoto AS foto
+                       FROM obrapartidasfotos
+                      WHERE idPartidaFoto = ? AND idPartidaObra = ?
+                      LIMIT 1"
+                );
+            }
             $stF->execute([$idFotoVer, $idPartida]);
             $blob = $stF->fetchColumn();
             if ($blob) {
@@ -379,6 +394,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (mb_strlen($pdfDescripcion) > 400) {
                 $pdfDescripcion = mb_substr($pdfDescripcion, 0, 400);
             }
+            $pdfFechaFoto   = trim($_POST['pdfFechaFoto'] ?? '');
             $rawBase64 = trim($_POST['fotoBase64'] ?? '');
             $blobData  = null;
 
@@ -394,12 +410,22 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if ($pdfTipo <= 0) {
                 $formError = 'Debes seleccionar el tipo de fotografía (Antes de, Después de, Actual).';
                 $formModal = 'foto';
+            } elseif ($pdfFechaFoto === '' || !valid_date($pdfFechaFoto)) {
+                $formError = 'Debes especificar una fecha válida para la fotografía (dd/mm/aaaa).';
+                $formModal = 'foto';
+            } elseif (!empty($partida['pdoFechaInicio']) && $pdfFechaFoto < $partida['pdoFechaInicio']) {
+                $formError = 'La fecha de la fotografía no puede ser anterior al inicio de la partida (' . fmt_date($partida['pdoFechaInicio']) . ').';
+                $formModal = 'foto';
+            } elseif (!empty($partida['pdoFechaFin']) && $pdfFechaFoto > $partida['pdoFechaFin']) {
+                $formError = 'La fecha de la fotografía no puede ser posterior al fin de la partida (' . fmt_date($partida['pdoFechaFin']) . ').';
+                $formModal = 'foto';
             } elseif (!$blobData || strlen($blobData) < 10) {
                 $formError = 'Debes adjuntar o capturar una fotografía.';
                 $formModal = 'foto';
             } else {
                 try {
                     // Compresión y optimización en servidor con GD
+                    $thumbBlob = null;
                     if (extension_loaded('gd')) {
                         $img = @imagecreatefromstring($blobData);
                         if ($img !== false) {
@@ -421,23 +447,63 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                                 $img = $resized;
                             }
 
+                            // 1. Guardar imagen principal en alta resolución
                             ob_start();
                             imagejpeg($img, null, 85);
                             $compressed = ob_get_clean();
-                            imagedestroy($img);
-
                             if ($compressed && strlen($compressed) > 100) {
                                 $blobData = $compressed;
                             }
+
+                            // 2. Generar miniatura en baja resolución para listados (max 480px)
+                            $curW = imagesx($img);
+                            $curH = imagesy($img);
+                            $thumbMax = 480;
+                            if ($curW > $thumbMax || $curH > $thumbMax) {
+                                if ($curW >= $curH) {
+                                    $tW = $thumbMax;
+                                    $tH = (int)round(($curH / $curW) * $thumbMax);
+                                } else {
+                                    $tH = $thumbMax;
+                                    $tW = (int)round(($curW / $curH) * $thumbMax);
+                                }
+                            } else {
+                                $tW = $curW;
+                                $tH = $curH;
+                            }
+
+                            $thumbImg = imagecreatetruecolor($tW, $tH);
+                            imagecopyresampled($thumbImg, $img, 0, 0, 0, 0, $tW, $tH, $curW, $curH);
+                            ob_start();
+                            imagejpeg($thumbImg, null, 75);
+                            $tRes = ob_get_clean();
+                            imagedestroy($thumbImg);
+                            if ($tRes && strlen($tRes) > 100) {
+                                $thumbBlob = $tRes;
+                            }
+
+                            imagedestroy($img);
                         }
+                    }
+
+                    if (!$thumbBlob) {
+                        $thumbBlob = $blobData;
                     }
 
                     $usuLogin = $currentUser['login'] ?? null;
                     $stInsFoto = $db->prepare(
-                        "INSERT INTO obrapartidasfotos (idPartidaObra, pdfFoto, pdfFecha, pdfTipo, pdfDescripcion, pdfFechaRegistroEnSistema, usuLogin)
-                         VALUES (?, ?, NOW(), ?, ?, CURDATE(), ?)"
+                        "INSERT INTO obrapartidasfotos (idPartidaObra, pdfFoto, pdfFecha, pdfTipo, pdfDescripcion, usuLogin, pdfFechaFoto, pdfFotoMiniatura)
+                         VALUES (?, ?, NOW(), ?, ?, ?, ?, ?)"
                     );
-                    $stInsFoto->execute([$idPartida, $blobData, $pdfTipo, $pdfDescripcion !== '' ? $pdfDescripcion : null, $usuLogin]);
+                    $stInsFoto->execute([
+                        $idPartida,
+                        $blobData,
+                        $pdfTipo,
+                        $pdfDescripcion !== '' ? $pdfDescripcion : null,
+                        $usuLogin,
+                        $pdfFechaFoto,
+                        $thumbBlob
+                    ]);
                     $_SESSION['flash_success'] = 'Fotografía agregada a la partida correctamente.';
                     header('Location: partida.php?id=' . $idPartida . '&seccion=fotos');
                     exit;
@@ -521,13 +587,14 @@ $catalogoTiposFotos = [];
 if ($puedeVer) {
     try {
         $stFotos = $db->prepare(
-            "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin,
+            "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin, f.pdfFechaFoto,
                     t.pdftDescripcion,
-                    LENGTH(f.pdfFoto) AS fotoSize
+                    LENGTH(f.pdfFoto) AS fotoSize,
+                    LENGTH(COALESCE(f.pdfFotoMiniatura, f.pdfFoto)) AS thumbSize
                FROM obrapartidasfotos f
           LEFT JOIN obrapartidasfotostipo t ON t.pdfTipo = f.pdfTipo
               WHERE f.idPartidaObra = ?
-              ORDER BY f.pdfFecha DESC, f.idPartidaFoto DESC"
+              ORDER BY COALESCE(f.pdfFechaFoto, f.pdfFecha) DESC, f.idPartidaFoto DESC"
         );
         $stFotos->execute([$idPartida]);
         $fotosPartida = $stFotos->fetchAll(PDO::FETCH_ASSOC);
@@ -1568,21 +1635,24 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                         <?php foreach ($fotosPartida as $foto): 
                             $tipoId = (int)($foto['pdfTipo'] ?? 0);
                             $tipoDesc = $foto['pdftDescripcion'] ?: 'Fotografía';
-                            $imgSrc = "partida.php?id={$idPartida}&ver_foto=" . (int)$foto['idPartidaFoto'];
+                            $imgThumbSrc = "partida.php?id={$idPartida}&ver_foto=" . (int)$foto['idPartidaFoto'] . "&thumb=1";
+                            $imgFullSrc  = "partida.php?id={$idPartida}&ver_foto=" . (int)$foto['idPartidaFoto'];
                             $tipoBadgeCls = 'badge-tipo-' . $tipoId;
-                            $pesoKb = !empty($foto['fotoSize']) ? round((int)$foto['fotoSize'] / 1024) : 0;
+                            $pesoFullKb = !empty($foto['fotoSize']) ? round((int)$foto['fotoSize'] / 1024) : 0;
+                            $pesoThumbKb = !empty($foto['thumbSize']) ? round((int)$foto['thumbSize'] / 1024) : 0;
                             $fotoDesc = trim((string)($foto['pdfDescripcion'] ?? ''));
+                            $fechaFotoDisplay = !empty($foto['pdfFechaFoto']) ? fmt_date($foto['pdfFechaFoto']) : fmt_date_time($foto['pdfFecha']);
                         ?>
-                            <div class="foto-card" data-tipo="<?= $tipoId ?>">
+                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-full-src="<?= $imgFullSrc ?>">
                                 <div class="foto-thumb-wrap js-lightbox-trigger"
-                                     data-src="<?= $imgSrc ?>"
+                                     data-src="<?= $imgFullSrc ?>"
                                      data-title="<?= htmlspecialchars($tipoDesc) ?>"
-                                     data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                     data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
                                      data-desc="<?= htmlspecialchars($fotoDesc) ?>"
-                                     title="Ver en pantalla completa">
-                                    <img src="<?= $imgSrc ?>" alt="<?= htmlspecialchars($fotoDesc ?: $tipoDesc) ?>" class="foto-thumb-img" loading="lazy">
+                                     title="Doble clic o clic en Ampliar para ver en alta resolución">
+                                    <img src="<?= $imgThumbSrc ?>" alt="<?= htmlspecialchars($fotoDesc ?: $tipoDesc) ?>" class="foto-thumb-img" loading="lazy">
                                     <div class="foto-thumb-overlay">
-                                        <div class="btn-zoom-circle">
+                                        <div class="btn-zoom-circle" title="Doble clic para ver original">
                                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
                                         </div>
                                     </div>
@@ -1592,9 +1662,18 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                                         <span class="badge-tipo <?= $tipoBadgeCls ?>">
                                             <?= htmlspecialchars($tipoDesc) ?>
                                         </span>
-                                        <?php if ($pesoKb > 0): ?>
-                                            <span style="font-size: .72rem; color: var(--subtle); font-weight: 600;"><?= $pesoKb ?> KB</span>
-                                        <?php endif; ?>
+                                        <div style="display: flex; gap: .4rem; align-items: center;">
+                                            <?php if ($pesoThumbKb > 0): ?>
+                                                <span style="font-size: .72rem; color: #2ae083; font-weight: 700; background: rgba(42,224,131,.1); border: 1px solid rgba(42,224,131,.25); border-radius: 6px; padding: .15rem .45rem;" title="Tamaño miniatura en listado">
+                                                    <?= $pesoThumbKb ?> KB
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($pesoFullKb > 0): ?>
+                                                <span style="font-size: .72rem; color: var(--subtle); font-weight: 600;" title="Tamaño fotografía original">
+                                                    HD <?= $pesoFullKb ?> KB
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
                                     <?php if ($fotoDesc !== ''): ?>
                                         <div class="foto-desc" style="font-size: .88rem; color: #f4f4f5; line-height: 1.45; font-weight: 500; word-break: break-word; margin: .15rem 0 .25rem;">
@@ -1602,24 +1681,25 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                                         </div>
                                     <?php endif; ?>
                                     <div class="foto-date">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                        <span><?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?></span>
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                        <span><?= htmlspecialchars($fechaFotoDisplay) ?></span>
                                     </div>
                                     <div class="foto-footer">
                                         <button type="button" class="btn-act js-lightbox-trigger"
-                                                data-src="<?= $imgSrc ?>"
+                                                data-src="<?= $imgFullSrc ?>"
                                                 data-title="<?= htmlspecialchars($tipoDesc) ?>"
-                                                data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                                data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
                                                 data-desc="<?= htmlspecialchars($fotoDesc) ?>"
-                                                style="padding: .45rem .85rem; font-size: .78rem;">
+                                                style="padding: .45rem .85rem; font-size: .78rem;"
+                                                title="Ver fotografía original en alta resolución">
                                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                                            <span>Ampliar</span>
+                                            <span>Ampliar HD</span>
                                         </button>
                                         <?php if ($perm['eliminar']): ?>
                                             <button type="button" class="btn-tbl danger js-eliminar-foto"
                                                     data-id="<?= (int)$foto['idPartidaFoto'] ?>"
                                                     data-tipo="<?= htmlspecialchars($tipoDesc) ?>"
-                                                    data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                                    data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
                                                     data-desc="<?= htmlspecialchars($fotoDesc) ?>"
                                                     title="Eliminar fotografía">
                                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -2053,18 +2133,41 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                     </div>
                 </div>
 
-                <!-- Selector de Tipo de Fotografía (obrapartidasfotostipo) -->
-                <div style="margin-top: 1.35rem;">
-                    <label class="form-label" for="pdfTipoSelect">Tipo de fotografía <span class="req">*</span></label>
-                    <select class="input-control" id="pdfTipoSelect" name="pdfTipo" required>
-                        <option value="">-- Selecciona el tipo de fotografía --</option>
-                        <?php foreach ($catalogoTiposFotos as $ctf): ?>
-                            <option value="<?= (int)$ctf['pdfTipo'] ?>">
-                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <p class="form-hint">Clasificación de la imagen: evidencia previa (Antes de), avance en curso (Actual) o conclusión (Después de).</p>
+                <!-- Fecha manual con calendario y Tipo de Fotografía -->
+                <div class="form-grid" style="margin-top: 1.35rem;">
+                    <div>
+                        <label class="form-label" for="pdfFechaFotoTxt">
+                            Fecha de la fotografía <span class="req">*</span>
+                        </label>
+                        <div class="date-field" id="dfFechaFoto" data-target="pdfFechaFoto">
+                            <input class="input-control date-text" type="text" id="pdfFechaFotoTxt" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off" required>
+                            <input type="hidden" name="pdfFechaFoto" id="pdfFechaFoto" value="">
+                            <button type="button" class="date-btn" aria-label="Abrir calendario fecha fotografía" aria-expanded="false" title="Abrir calendario interactivo">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                            </button>
+                            <div class="calendar"></div>
+                        </div>
+                        <?php if (!empty($partida['pdoFechaInicio']) && !empty($partida['pdoFechaFin'])): ?>
+                            <p class="form-hint">Rango: <?= fmt_date($partida['pdoFechaInicio']) ?> al <?= fmt_date($partida['pdoFechaFin']) ?></p>
+                        <?php elseif (!empty($partida['pdoFechaInicio'])): ?>
+                            <p class="form-hint">Desde <?= fmt_date($partida['pdoFechaInicio']) ?></p>
+                        <?php elseif (!empty($partida['pdoFechaFin'])): ?>
+                            <p class="form-hint">Hasta <?= fmt_date($partida['pdoFechaFin']) ?></p>
+                        <?php endif; ?>
+                    </div>
+
+                    <div>
+                        <label class="form-label" for="pdfTipoSelect">Tipo de fotografía <span class="req">*</span></label>
+                        <select class="input-control" id="pdfTipoSelect" name="pdfTipo" required>
+                            <option value="">-- Seleccionar tipo --</option>
+                            <?php foreach ($catalogoTiposFotos as $ctf): ?>
+                                <option value="<?= (int)$ctf['pdfTipo'] ?>">
+                                    <?= htmlspecialchars($ctf['pdftDescripcion']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="form-hint">Antes de, Actual o Después de.</p>
+                    </div>
                 </div>
 
                 <!-- Descripción de la fotografía (pdfDescripcion) -->
@@ -2140,6 +2243,8 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
     <script>
     (() => {
         const OBRA_INICIO = <?= json_encode($obraInicio) ?>;
+        const PARTIDA_INICIO = <?= json_encode($partida['pdoFechaInicio'] ?? null) ?>;
+        const PARTIDA_FIN    = <?= json_encode($partida['pdoFechaFin'] ?? null) ?>;
         const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
         const DOW = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
 
@@ -2778,6 +2883,12 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             const pdfTipoSel = document.getElementById('pdfTipoSelect');
             const inpFotoDesc = document.getElementById('pdfDescripcion');
             const countFotoDesc = document.getElementById('fotoDescCount');
+            const dfFechaFoto = document.getElementById('dfFechaFoto');
+            const dpFoto = dfFechaFoto ? DatePicker(dfFechaFoto) : null;
+            if (dpFoto) {
+                if (PARTIDA_INICIO) dpFoto.min = PARTIDA_INICIO;
+                if (PARTIDA_FIN)    dpFoto.max = PARTIDA_FIN;
+            }
             const errBox = document.getElementById('modalFotoError');
             const errText = document.getElementById('modalFotoErrorText');
             const btnGuardar = document.getElementById('btnGuardarFoto');
@@ -2927,6 +3038,16 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                         inpFotoDesc.value = '';
                         if (countFotoDesc) countFotoDesc.textContent = '0/400';
                     }
+                    if (dpFoto) {
+                        const hoyIso = iso(new Date());
+                        let defaultFecha = hoyIso;
+                        if (PARTIDA_INICIO && defaultFecha < PARTIDA_INICIO) {
+                            defaultFecha = PARTIDA_INICIO;
+                        } else if (PARTIDA_FIN && defaultFecha > PARTIDA_FIN) {
+                            defaultFecha = PARTIDA_FIN;
+                        }
+                        dpFoto.set(defaultFecha, true);
+                    }
                     errBox.classList.remove('show');
                     btnGuardar.classList.remove('loading');
                     switchModo('archivo');
@@ -2941,6 +3062,32 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                     e.preventDefault();
                     errText.textContent = 'Debes adjuntar un archivo o tomar una fotografía antes de guardar.';
                     errBox.classList.add('show');
+                    return;
+                }
+                const valFecha = dpFoto ? dpFoto.get() : (document.getElementById('pdfFechaFoto')?.value || '');
+                const txtFecha = document.getElementById('pdfFechaFotoTxt')?.value.trim() || '';
+
+                if (!txtFecha || !valFecha) {
+                    e.preventDefault();
+                    errText.textContent = txtFecha
+                        ? 'El formato de fecha no es válido (usa dd/mm/aaaa).'
+                        : 'Debes indicar la fecha de la fotografía.';
+                    errBox.classList.add('show');
+                    document.getElementById('pdfFechaFotoTxt')?.focus();
+                    return;
+                }
+                if (PARTIDA_INICIO && valFecha < PARTIDA_INICIO) {
+                    e.preventDefault();
+                    errText.textContent = `La fecha de la fotografía no puede ser anterior al inicio de la partida (${isoToTxt(PARTIDA_INICIO)}).`;
+                    errBox.classList.add('show');
+                    document.getElementById('pdfFechaFotoTxt')?.focus();
+                    return;
+                }
+                if (PARTIDA_FIN && valFecha > PARTIDA_FIN) {
+                    e.preventDefault();
+                    errText.textContent = `La fecha de la fotografía no puede ser posterior al fin de la partida (${isoToTxt(PARTIDA_FIN)}).`;
+                    errBox.classList.add('show');
+                    document.getElementById('pdfFechaFotoTxt')?.focus();
                     return;
                 }
                 if (!pdfTipoSel.value) {
@@ -3032,6 +3179,17 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             el.addEventListener('click', (e) => {
                 e.stopPropagation();
                 openLightbox(el.dataset.src, el.dataset.title, el.dataset.date, el.dataset.desc);
+            });
+        });
+
+        // Doble clic sobre cualquier parte de la tarjeta para abrir la foto original en alta resolución
+        document.querySelectorAll('.foto-card').forEach(card => {
+            card.addEventListener('dblclick', (e) => {
+                if (e.target.closest('.js-eliminar-foto')) return;
+                const trigger = card.querySelector('.js-lightbox-trigger');
+                if (trigger) {
+                    openLightbox(trigger.dataset.src, trigger.dataset.title, trigger.dataset.date, trigger.dataset.desc);
+                }
             });
         });
 
