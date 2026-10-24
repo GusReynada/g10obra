@@ -457,9 +457,6 @@ $csrf = csrf_token();
                         </p>
                     <?php endif; ?>
                     <div class="hero-stats">
-                        <div><span class="lbl">Total Neto</span><span class="val">$<?= number_format((float)$montoTotal, 2) ?></span></div>
-                        <div><span class="lbl">Fecha Inicio</span><span class="val"><?= fmt_date($obraInicio) ?></span></div>
-                        <div><span class="lbl">Ejercicio</span><span class="val"><?= htmlspecialchars($obra['obrEjercicioFiscal'] ?: '—') ?></span></div>
                         <div><span class="lbl">Partidas</span><span class="val"><?= count($partidas) ?></span></div>
                     </div>
                 </div>

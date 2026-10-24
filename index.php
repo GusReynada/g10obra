@@ -593,24 +593,6 @@ if (!empty($currentUser['nombre'])) {
                                         </p>
                                     <?php endif; ?>
 
-                                    <div class="obra-meta-grid">
-                                        <div>
-                                            <span class="lbl">Monto Sin IVA</span>
-                                            <span class="val">$<?= number_format((float)($obra['obrMontoSinIva'] ?? 0), 2) ?></span>
-                                        </div>
-                                        <div>
-                                            <span class="lbl">Total Neto</span>
-                                            <span class="val bold">$<?= number_format((float)$montoTotal, 2) ?></span>
-                                        </div>
-                                        <div>
-                                            <span class="lbl">Fecha Inicio</span>
-                                            <span class="val"><?= !empty($obra['obrFechaInicio']) ? date('d/m/Y', strtotime($obra['obrFechaInicio'])) : 'S/F' ?></span>
-                                        </div>
-                                        <div>
-                                            <span class="lbl">Ejercicio</span>
-                                            <span class="val"><?= htmlspecialchars($obra['obrEjercicioFiscal'] ?: date('Y')) ?></span>
-                                        </div>
-                                    </div>
                                 </div>
                             </a>
                         <?php endforeach; ?>
