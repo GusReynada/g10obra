@@ -365,6 +365,9 @@ if (!empty($currentUser['nombre'])) {
             gap: 1.35rem;
         }
         .obra-card {
+            color: inherit;
+            text-decoration: none;
+            cursor: pointer;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
@@ -565,7 +568,7 @@ if (!empty($currentUser['nombre'])) {
                                 }
                                 $montoTotal = ($obra['obrMontoSinIva'] ?? 0) + ($obra['obrIva'] ?? 0) - ($obra['obrRetencion'] ?? 0);
                             ?>
-                            <article class="obra-card">
+                            <a href="obra.php?id=<?= (int)$obra['idObra'] ?>" class="obra-card" id="obra-<?= (int)$obra['idObra'] ?>" aria-label="Ver partidas de <?= htmlspecialchars($obra['obrNombreObra']) ?>">
                                 <?php if ($obraFotoData): ?>
                                     <div class="obra-card-cover">
                                         <img src="<?= $obraFotoData ?>" alt="<?= htmlspecialchars($obra['obrNombreObra']) ?>">
@@ -609,7 +612,7 @@ if (!empty($currentUser['nombre'])) {
                                         </div>
                                     </div>
                                 </div>
-                            </article>
+                            </a>
                         <?php endforeach; ?>
                     </div>
                 <?php endif; ?>
