@@ -267,10 +267,11 @@ $csrf = csrf_token();
         .search-box input { padding-left: 2.3rem; min-width: 240px; }
         .search-box svg { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--subtle); pointer-events: none; }
 
-        .partidas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.2rem; }
+        .partidas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 1.25rem; }
         .partida-card {
             position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-            padding: 1.3rem 1.3rem 1.1rem; backdrop-filter: blur(14px); display: flex; flex-direction: column;
+            padding: 1.3rem 1.3rem 1.1rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            display: flex; flex-direction: column;
             text-decoration: none; color: inherit; cursor: pointer;
             transition: transform .25s var(--ease), border-color .25s var(--ease), box-shadow .25s var(--ease);
             animation: rise .45s var(--ease) both;
@@ -283,6 +284,20 @@ $csrf = csrf_token();
         .partida-card:hover::before { opacity: 1; }
         .partida-card:hover .card-arrow { color: #fff !important; transform: translateX(3px); }
         .card-arrow { transition: color .2s var(--ease), transform .2s var(--ease); }
+
+        .partida-card-inner {
+            display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1.25rem; width: 100%; height: 100%;
+        }
+        .partida-card-info {
+            flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%;
+        }
+        .partida-card-circle {
+            flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+            cursor: default; user-select: none; padding: .25rem;
+        }
+        .radial-progress-svg {
+            display: block; filter: drop-shadow(0 0 12px rgba(34, 224, 133, 0.25)); user-select: none;
+        }
         .partida-clave { font-family: 'Outfit', sans-serif; font-size: .78rem; font-weight: 800; letter-spacing: .06em; color: #fff; background: rgba(255,255,255,.08); border: 1px solid var(--border-strong); padding: .28rem .65rem; border-radius: 7px; }
         .partida-desc { font-size: 1rem; font-weight: 600; color: #f4f4f5; line-height: 1.45; margin: .85rem 0 1rem; flex: 1; }
         .partida-dates { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; padding: .8rem; border-radius: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--border); font-size: .82rem; }
@@ -398,6 +413,12 @@ $csrf = csrf_token();
             .search-box input { min-width: 0; width: 100%; }
             .section-header-row > * { width: 100%; }
             .calendar.align-right { left: 0; right: auto; }
+            .partidas-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 480px) {
+            .partida-card-inner { flex-direction: column; align-items: center; text-align: left; }
+            .partida-card-info { width: 100%; }
+            .partida-card-circle { margin-top: .75rem; }
         }
     </style>
 </head>
@@ -530,29 +551,65 @@ $csrf = csrf_token();
                                 if ($p['pdoFechaInicio'] && $p['pdoFechaFin']) {
                                     $dias = (new DateTime($p['pdoFechaInicio']))->diff(new DateTime($p['pdoFechaFin']))->days + 1;
                                 }
+                                $pctAvance = max(0, min(100, (int)($p['pdoAvance'] ?? 0)));
+                                $circRadius = 38;
+                                $circumference = 2 * M_PI * $circRadius;
+                                $dashOffset = $circumference - ($circumference * $pctAvance / 100);
                             ?>
                                 <a href="partida.php?id=<?= (int)$p['idPartidaObra'] ?>" class="partida-card" style="animation-delay: <?= min($i, 12) * 40 ?>ms"
                                    data-search="<?= htmlspecialchars(mb_strtolower(($p['pdoClave'] ?? '') . ' ' . ($p['pdoDescripcion'] ?? ''))) ?>"
                                    title="Ver detalles e insumos de la partida <?= htmlspecialchars($p['pdoClave'] ?? '') ?>">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; gap: .5rem;">
-                                        <span class="partida-clave"><?= htmlspecialchars($p['pdoClave'] ?: 'S/C') ?></span>
-                                        <span class="tag"><?= (int)$p['totalInsumos'] ?> insumo<?= (int)$p['totalInsumos'] === 1 ? '' : 's' ?></span>
-                                    </div>
-                                    <p class="partida-desc"><?= htmlspecialchars($p['pdoDescripcion'] ?: 'Sin descripción') ?></p>
-                                    <div class="partida-dates">
-                                        <div><span class="lbl">Inicio</span><span class="val"><?= fmt_date($p['pdoFechaInicio']) ?></span></div>
-                                        <div><span class="lbl">Fin</span><span class="val"><?= fmt_date($p['pdoFechaFin']) ?></span></div>
-                                    </div>
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--border);">
-                                        <?php if ($dias): ?>
-                                            <span class="partida-duration" style="margin-top: 0;">Duración: <?= $dias ?> día<?= $dias === 1 ? '' : 's' ?></span>
-                                        <?php else: ?>
-                                            <span></span>
-                                        <?php endif; ?>
-                                        <span class="card-arrow" style="font-size: .8rem; font-weight: 600; color: #a1a1aa; display: inline-flex; align-items: center; gap: .3rem;">
-                                            Ver insumos
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
-                                        </span>
+                                    <div class="partida-card-inner">
+                                        <div class="partida-card-info">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; gap: .5rem;">
+                                                <span class="partida-clave"><?= htmlspecialchars($p['pdoClave'] ?: 'S/C') ?></span>
+                                                <span class="tag"><?= (int)$p['totalInsumos'] ?> insumo<?= (int)$p['totalInsumos'] === 1 ? '' : 's' ?></span>
+                                            </div>
+                                            <p class="partida-desc"><?= htmlspecialchars($p['pdoDescripcion'] ?: 'Sin descripción') ?></p>
+                                            <div class="partida-dates">
+                                                <div><span class="lbl">Inicio</span><span class="val"><?= fmt_date($p['pdoFechaInicio']) ?></span></div>
+                                                <div><span class="lbl">Fin</span><span class="val"><?= fmt_date($p['pdoFechaFin']) ?></span></div>
+                                            </div>
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--border);">
+                                                <?php if ($dias): ?>
+                                                    <span class="partida-duration" style="margin-top: 0;">Duración: <?= $dias ?> día<?= $dias === 1 ? '' : 's' ?></span>
+                                                <?php else: ?>
+                                                    <span></span>
+                                                <?php endif; ?>
+                                                <span class="card-arrow" style="font-size: .8rem; font-weight: 600; color: #a1a1aa; display: inline-flex; align-items: center; gap: .3rem;">
+                                                    Ver insumos
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <!-- Círculo Porcentual de Avance (Estático a la derecha) -->
+                                        <div class="partida-card-circle" onclick="event.stopPropagation(); event.preventDefault();" aria-label="Avance: <?= $pctAvance ?>%">
+                                            <svg width="86" height="86" viewBox="0 0 100 100" class="radial-progress-svg" aria-hidden="true">
+                                                <defs>
+                                                    <linearGradient id="circleGrad-<?= (int)$p['idPartidaObra'] ?>" x1="0%" y1="0%" x2="100%" y2="100%">
+                                                        <stop offset="0%" stop-color="#0cd2a6" />
+                                                        <stop offset="100%" stop-color="#22e085" />
+                                                    </linearGradient>
+                                                </defs>
+                                                <circle cx="50" cy="50" r="<?= $circRadius ?>" fill="none" stroke="#1d2025" stroke-width="11" />
+                                                <?php if ($pctAvance > 0): ?>
+                                                    <circle cx="50" cy="50" r="<?= $circRadius ?>" fill="none"
+                                                            stroke="url(#circleGrad-<?= (int)$p['idPartidaObra'] ?>)"
+                                                            stroke-width="11"
+                                                            stroke-linecap="round"
+                                                            stroke-dasharray="<?= number_format($circumference, 3, '.', '') ?>"
+                                                            stroke-dashoffset="<?= number_format($dashOffset, 3, '.', '') ?>"
+                                                            transform="rotate(-90 50 50)" />
+                                                <?php endif; ?>
+                                                <text x="50" y="50" text-anchor="middle" dominant-baseline="central"
+                                                      fill="#22e085"
+                                                      font-family="'Outfit', -apple-system, sans-serif"
+                                                      font-size="22"
+                                                      font-weight="800"
+                                                      letter-spacing="-0.02em"><?= $pctAvance ?>%</text>
+                                            </svg>
+                                        </div>
                                     </div>
                                 </a>
                             <?php endforeach; ?>

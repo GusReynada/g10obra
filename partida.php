@@ -42,6 +42,29 @@ if (!$partida) {
 $idObra = (int)$partida['idObra'];
 
 // ---------------------------------------------------------------------------
+// Servir fotografía en streaming directamente desde la BD (evita memory leaks)
+// ---------------------------------------------------------------------------
+if (isset($_GET['ver_foto'])) {
+    $idFotoVer = (int)$_GET['ver_foto'];
+    if ($idFotoVer > 0) {
+        try {
+            $stF = $db->prepare("SELECT pdfFoto FROM obrapartidasfotos WHERE idPartidaFoto = ? AND idPartidaObra = ? LIMIT 1");
+            $stF->execute([$idFotoVer, $idPartida]);
+            $blob = $stF->fetchColumn();
+            if ($blob) {
+                header('Content-Type: image/jpeg');
+                header('Cache-Control: public, max-age=604800, immutable');
+                header('Content-Length: ' . strlen($blob));
+                echo $blob;
+                exit;
+            }
+        } catch (Exception $e) {}
+    }
+    http_response_code(404);
+    exit;
+}
+
+// ---------------------------------------------------------------------------
 // Permisos del módulo PARTIDAS (PAS8)
 // ---------------------------------------------------------------------------
 $perm = ['consultar' => false, 'agregar' => false, 'modificar' => false, 'eliminar' => false];
@@ -77,10 +100,14 @@ function valid_date(?string $d): bool {
 function fmt_date(?string $d): string {
     return $d ? date('d/m/Y', strtotime($d)) : 'S/F';
 }
+function fmt_date_time(?string $d): string {
+    return $d ? date('d/m/Y H:i', strtotime($d)) . ' hrs' : 'S/F';
+}
 
 $obraInicio = !empty($partida['obrInicio']) ? $partida['obrInicio'] : null;
 $formError  = null;
-$formModal  = null; // 'partida' o 'insumo'
+$formModal  = null; // 'partida', 'insumo', 'foto' o 'avance'
+$seccionActiva = (($_GET['seccion'] ?? $_POST['seccion'] ?? 'insumos') === 'fotos') ? 'fotos' : 'insumos';
 
 // ---------------------------------------------------------------------------
 // Acciones POST
@@ -142,6 +169,31 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
     }
+    // ACTUALIZAR AVANCE DE LA PARTIDA (0 - 100%)
+    elseif ($action === 'actualizar_avance') {
+        if (!$perm['modificar']) {
+            $formError = 'No tienes permiso para modificar el avance de la partida.';
+            $formModal = 'avance';
+        } else {
+            $nuevoAvance = (int)($_POST['pdoAvance'] ?? 0);
+            if ($nuevoAvance < 0 || $nuevoAvance > 100) {
+                $formError = 'El porcentaje de avance debe estar entre 0% y 100%.';
+                $formModal = 'avance';
+            } else {
+                try {
+                    $stAv = $db->prepare("UPDATE obrapartidas SET pdoAvance = ? WHERE idPartidaObra = ? AND idObra = ?");
+                    $stAv->execute([$nuevoAvance, $idPartida, $idObra]);
+                    $_SESSION['flash_success'] = "Avance de la partida actualizado al {$nuevoAvance}%.";
+                    $secParam = ($seccionActiva === 'fotos') ? '&seccion=fotos' : '';
+                    header("Location: partida.php?id={$idPartida}{$secParam}");
+                    exit;
+                } catch (Exception $e) {
+                    $formError = 'Error al actualizar el avance: ' . $e->getMessage();
+                    $formModal = 'avance';
+                }
+            }
+        }
+    }
     // 2. ELIMINAR PARTIDA COMPLETA
     elseif ($action === 'eliminar_partida') {
         if (!$perm['eliminar']) {
@@ -174,9 +226,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $tipoInsumo  = $_POST['tipoInsumo'] ?? 'existente'; // 'existente' | 'nuevo'
             $idInsumoSel = (int)($_POST['idInsumo'] ?? 0);
             $cantidad    = (int)($_POST['opiCantidad'] ?? 0);
+            $rawCosto    = trim((string)($_POST['opiCostoUnitario'] ?? ''));
+            $costoUnit   = ($rawCosto !== '' && is_numeric(str_replace(',', '.', $rawCosto))) ? (float)str_replace(',', '.', $rawCosto) : -1;
 
             if ($cantidad <= 0) {
                 $formError = 'La cantidad debe ser un número entero mayor a 0.';
+                $formModal = 'insumo';
+            } elseif ($costoUnit < 0) {
+                $formError = 'El costo unitario debe ser un número mayor o igual a 0.';
                 $formModal = 'insumo';
             } elseif ($tipoInsumo === 'nuevo') {
                 $nuevoDesc = trim($_POST['nuevoImoDescripcion'] ?? '');
@@ -208,13 +265,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $asigExist = $stCheckDup->fetch(PDO::FETCH_ASSOC);
 
                         if ($asigExist) {
-                            // Sumar cantidad si ya existe
-                            $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = opiCantidad + ?, opiSaldo = opiSaldo + ? WHERE idPartidaInsumos = ?");
-                            $stUpd->execute([$cantidad, $cantidad, $asigExist['idPartidaInsumos']]);
-                            $_SESSION['flash_success'] = "El insumo ya existía en la partida; se incrementó la cantidad en {$cantidad}.";
+                            // Sumar cantidad si ya existe y actualizar costo unitario
+                            $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = opiCantidad + ?, opiSaldo = opiSaldo + ?, opiCostoUnitario = ? WHERE idPartidaInsumos = ?");
+                            $stUpd->execute([$cantidad, $cantidad, $costoUnit, $asigExist['idPartidaInsumos']]);
+                            $_SESSION['flash_success'] = "El insumo ya existía en la partida; se incrementó la cantidad en {$cantidad} y se actualizó el costo unitario.";
                         } else {
-                            $stAdd = $db->prepare("INSERT INTO obrapartidasinsumos (idPartidaObra, idInsumo, opiCantidad, opiSaldo) VALUES (?, ?, ?, ?)");
-                            $stAdd->execute([$idPartida, $idInsumoFinal, $cantidad, $cantidad]);
+                            $stAdd = $db->prepare("INSERT INTO obrapartidasinsumos (idPartidaObra, idInsumo, opiCantidad, opiSaldo, opiCostoUnitario) VALUES (?, ?, ?, ?, ?)");
+                            $stAdd->execute([$idPartida, $idInsumoFinal, $cantidad, $cantidad, $costoUnit]);
                             $_SESSION['flash_success'] = "Insumo '{$nuevoDesc}' creado y agregado a la partida.";
                         }
 
@@ -240,12 +297,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $asigExist = $stCheckDup->fetch(PDO::FETCH_ASSOC);
 
                         if ($asigExist) {
-                            $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = opiCantidad + ?, opiSaldo = opiSaldo + ? WHERE idPartidaInsumos = ?");
-                            $stUpd->execute([$cantidad, $cantidad, $asigExist['idPartidaInsumos']]);
-                            $_SESSION['flash_success'] = "El insumo ya estaba en la partida; se incrementó su cantidad en {$cantidad}.";
+                            $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = opiCantidad + ?, opiSaldo = opiSaldo + ?, opiCostoUnitario = ? WHERE idPartidaInsumos = ?");
+                            $stUpd->execute([$cantidad, $cantidad, $costoUnit, $asigExist['idPartidaInsumos']]);
+                            $_SESSION['flash_success'] = "El insumo ya estaba en la partida; se incrementó su cantidad en {$cantidad} y se actualizó el costo unitario.";
                         } else {
-                            $stAdd = $db->prepare("INSERT INTO obrapartidasinsumos (idPartidaObra, idInsumo, opiCantidad, opiSaldo) VALUES (?, ?, ?, ?)");
-                            $stAdd->execute([$idPartida, $idInsumoSel, $cantidad, $cantidad]);
+                            $stAdd = $db->prepare("INSERT INTO obrapartidasinsumos (idPartidaObra, idInsumo, opiCantidad, opiSaldo, opiCostoUnitario) VALUES (?, ?, ?, ?, ?)");
+                            $stAdd->execute([$idPartida, $idInsumoSel, $cantidad, $cantidad, $costoUnit]);
                             $_SESSION['flash_success'] = "Insumo agregado a la partida.";
                         }
                         header('Location: partida.php?id=' . $idPartida);
@@ -258,16 +315,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
     }
-    // 4. EDITAR CANTIDAD DE INSUMO
+    // 4. MODIFICAR INSUMO (CANTIDAD Y COSTO UNITARIO)
     elseif ($action === 'editar_cantidad_insumo') {
         if (!$perm['modificar']) {
             $_SESSION['flash_error'] = 'No tienes permiso para modificar insumos.';
         } else {
             $idPartidaInsumos = (int)($_POST['idPartidaInsumos'] ?? 0);
             $nuevaCantidad    = (int)($_POST['opiCantidad'] ?? 0);
+            $rawCosto         = trim((string)($_POST['opiCostoUnitario'] ?? ''));
+            $nuevoCosto       = ($rawCosto !== '' && is_numeric(str_replace(',', '.', $rawCosto))) ? (float)str_replace(',', '.', $rawCosto) : -1;
 
-            if ($idPartidaInsumos <= 0 || $nuevaCantidad <= 0) {
-                $_SESSION['flash_error'] = 'La cantidad debe ser un entero mayor a 0.';
+            if ($idPartidaInsumos <= 0 || $nuevaCantidad <= 0 || $nuevoCosto < 0) {
+                $_SESSION['flash_error'] = 'Ingresa una cantidad mayor a 0 y un costo unitario válido mayor o igual a 0.';
             } else {
                 try {
                     // Verificar pertenencia a la partida actual y calcular ajuste de saldo proporcional
@@ -281,12 +340,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $dif = $nuevaCantidad - (int)$curr['opiCantidad'];
                         $nuevoSaldo = max(0, (int)$curr['opiSaldo'] + $dif);
 
-                        $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = ?, opiSaldo = ? WHERE idPartidaInsumos = ? AND idPartidaObra = ?");
-                        $stUpd->execute([$nuevaCantidad, $nuevoSaldo, $idPartidaInsumos, $idPartida]);
-                        $_SESSION['flash_success'] = 'Cantidad de insumo actualizada.';
+                        $stUpd = $db->prepare("UPDATE obrapartidasinsumos SET opiCantidad = ?, opiSaldo = ?, opiCostoUnitario = ? WHERE idPartidaInsumos = ? AND idPartidaObra = ?");
+                        $stUpd->execute([$nuevaCantidad, $nuevoSaldo, $nuevoCosto, $idPartidaInsumos, $idPartida]);
+                        $_SESSION['flash_success'] = 'Insumo actualizado correctamente.';
                     }
                 } catch (Exception $e) {
-                    $_SESSION['flash_error'] = 'Error al actualizar cantidad: ' . $e->getMessage();
+                    $_SESSION['flash_error'] = 'Error al actualizar insumo: ' . $e->getMessage();
                 }
             }
         }
@@ -310,6 +369,104 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         header('Location: partida.php?id=' . $idPartida);
         exit;
     }
+    // 6. AGREGAR FOTOGRAFÍA A LA PARTIDA
+    elseif ($action === 'agregar_foto') {
+        if (!$perm['agregar'] && !$perm['modificar']) {
+            $_SESSION['flash_error'] = 'No tienes permiso para agregar fotografías a la partida.';
+        } else {
+            $pdfTipo        = (int)($_POST['pdfTipo'] ?? 0);
+            $pdfDescripcion = trim($_POST['pdfDescripcion'] ?? '');
+            if (mb_strlen($pdfDescripcion) > 400) {
+                $pdfDescripcion = mb_substr($pdfDescripcion, 0, 400);
+            }
+            $rawBase64 = trim($_POST['fotoBase64'] ?? '');
+            $blobData  = null;
+
+            if ($rawBase64 !== '') {
+                if (preg_match('/^data:image\/(\w+);base64,/', $rawBase64)) {
+                    $rawBase64 = substr($rawBase64, strpos($rawBase64, ',') + 1);
+                }
+                $blobData = base64_decode($rawBase64);
+            } elseif (!empty($_FILES['fotoFile']['tmp_name']) && is_uploaded_file($_FILES['fotoFile']['tmp_name'])) {
+                $blobData = file_get_contents($_FILES['fotoFile']['tmp_name']);
+            }
+
+            if ($pdfTipo <= 0) {
+                $formError = 'Debes seleccionar el tipo de fotografía (Antes de, Después de, Actual).';
+                $formModal = 'foto';
+            } elseif (!$blobData || strlen($blobData) < 10) {
+                $formError = 'Debes adjuntar o capturar una fotografía.';
+                $formModal = 'foto';
+            } else {
+                try {
+                    // Compresión y optimización en servidor con GD
+                    if (extension_loaded('gd')) {
+                        $img = @imagecreatefromstring($blobData);
+                        if ($img !== false) {
+                            $origW = imagesx($img);
+                            $origH = imagesy($img);
+                            $maxDim = 1920;
+
+                            if ($origW > $maxDim || $origH > $maxDim) {
+                                if ($origW >= $origH) {
+                                    $newW = $maxDim;
+                                    $newH = (int)round(($origH / $origW) * $maxDim);
+                                } else {
+                                    $newH = $maxDim;
+                                    $newW = (int)round(($origW / $origH) * $maxDim);
+                                }
+                                $resized = imagecreatetruecolor($newW, $newH);
+                                imagecopyresampled($resized, $img, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
+                                imagedestroy($img);
+                                $img = $resized;
+                            }
+
+                            ob_start();
+                            imagejpeg($img, null, 85);
+                            $compressed = ob_get_clean();
+                            imagedestroy($img);
+
+                            if ($compressed && strlen($compressed) > 100) {
+                                $blobData = $compressed;
+                            }
+                        }
+                    }
+
+                    $usuLogin = $currentUser['login'] ?? null;
+                    $stInsFoto = $db->prepare(
+                        "INSERT INTO obrapartidasfotos (idPartidaObra, pdfFoto, pdfFecha, pdfTipo, pdfDescripcion, pdfFechaRegistroEnSistema, usuLogin)
+                         VALUES (?, ?, NOW(), ?, ?, CURDATE(), ?)"
+                    );
+                    $stInsFoto->execute([$idPartida, $blobData, $pdfTipo, $pdfDescripcion !== '' ? $pdfDescripcion : null, $usuLogin]);
+                    $_SESSION['flash_success'] = 'Fotografía agregada a la partida correctamente.';
+                    header('Location: partida.php?id=' . $idPartida . '&seccion=fotos');
+                    exit;
+                } catch (Exception $e) {
+                    $formError = 'Error al registrar la fotografía: ' . $e->getMessage();
+                    $formModal = 'foto';
+                }
+            }
+        }
+        header('Location: partida.php?id=' . $idPartida . '&seccion=fotos');
+        exit;
+    }
+    // 7. ELIMINAR FOTOGRAFÍA DE LA PARTIDA
+    elseif ($action === 'eliminar_foto') {
+        if (!$perm['eliminar']) {
+            $_SESSION['flash_error'] = 'No tienes permiso para eliminar fotografías.';
+        } else {
+            $idPartidaFoto = (int)($_POST['idPartidaFoto'] ?? 0);
+            try {
+                $stDelFoto = $db->prepare("DELETE FROM obrapartidasfotos WHERE idPartidaFoto = ? AND idPartidaObra = ?");
+                $stDelFoto->execute([$idPartidaFoto, $idPartida]);
+                $_SESSION['flash_success'] = 'Fotografía eliminada correctamente.';
+            } catch (Exception $e) {
+                $_SESSION['flash_error'] = 'Error al eliminar la fotografía: ' . $e->getMessage();
+            }
+        }
+        header('Location: partida.php?id=' . $idPartida . '&seccion=fotos');
+        exit;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +477,7 @@ if ($puedeVer) {
     try {
         $stInsumos = $db->prepare(
             "SELECT opi.idPartidaInsumos, opi.idPartidaObra, opi.idInsumo, opi.opiCantidad, opi.opiSaldo,
+                    opi.opiCostoUnitario,
                     i.imoDescripcion,
                     u.umeDescripcion
                FROM obrapartidasinsumos opi
@@ -355,6 +513,40 @@ if ($perm['agregar'] || $perm['modificar']) {
     } catch (Exception $e) {}
 }
 
+// ---------------------------------------------------------------------------
+// Consultar fotos asignadas a esta partida y catálogo de tipos
+// ---------------------------------------------------------------------------
+$fotosPartida = [];
+$catalogoTiposFotos = [];
+if ($puedeVer) {
+    try {
+        $stFotos = $db->prepare(
+            "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin,
+                    t.pdftDescripcion,
+                    LENGTH(f.pdfFoto) AS fotoSize
+               FROM obrapartidasfotos f
+          LEFT JOIN obrapartidasfotostipo t ON t.pdfTipo = f.pdfTipo
+              WHERE f.idPartidaObra = ?
+              ORDER BY f.pdfFecha DESC, f.idPartidaFoto DESC"
+        );
+        $stFotos->execute([$idPartida]);
+        $fotosPartida = $stFotos->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $fotosPartida = [];
+    }
+
+    try {
+        $catalogoTiposFotos = $db->query(
+            "SELECT pdfTipo, pdftDescripcion FROM obrapartidasfotostipo ORDER BY pdfTipo ASC"
+        )->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $catalogoTiposFotos = [];
+    }
+}
+
+$totalFotos    = count($fotosPartida);
+$seccionActiva = ($_GET['seccion'] ?? 'insumos') === 'fotos' ? 'fotos' : 'insumos';
+
 $csrf = csrf_token();
 $flashSuccess = $_SESSION['flash_success'] ?? null;
 $flashError   = $_SESSION['flash_error'] ?? null;
@@ -385,8 +577,16 @@ if ($partida['pdoFechaInicio'] && $partida['pdoFechaFin']) {
     $partidaDias = (new DateTime($partida['pdoFechaInicio']))->diff(new DateTime($partida['pdoFechaFin']))->days + 1;
 }
 
-$totalInsumos = count($insumosAsignados);
-$sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
+$totalInsumos   = count($insumosAsignados);
+$sumaCantidad   = array_sum(array_column($insumosAsignados, 'opiCantidad'));
+$granTotalCosto = 0;
+foreach ($insumosAsignados as $ins) {
+    $granTotalCosto += (int)$ins['opiCantidad'] * (float)($ins['opiCostoUnitario'] ?? 0);
+}
+
+// Porcentaje de avance físico de la partida (0 - 100%)
+$porcentajeAvance = (int)($partida['pdoAvance'] ?? 0);
+$porcentajeAvance = max(0, min(100, $porcentajeAvance));
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -447,7 +647,42 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         .partida-obra-parent svg { color: var(--subtle); }
         .partida-obra-parent strong { color: #e4e4e7; }
 
-        .hero-actions { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+        .hero-actions { display: flex; gap: .6rem; align-items: center; }
+        .hero-menu-wrap { position: relative; }
+        .btn-dots {
+            width: 36px; height: 36px; border-radius: 10px;
+            background: rgba(255,255,255,.05); border: 1px solid var(--border);
+            color: var(--muted); display: grid; place-items: center;
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .btn-dots:hover, .btn-dots[aria-expanded="true"] {
+            background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.3);
+        }
+        .hero-dropdown-menu {
+            position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
+            min-width: 175px; background: #141417; border: 1px solid var(--border-strong);
+            border-radius: 12px; padding: .35rem; box-shadow: 0 18px 40px -10px rgba(0,0,0,.9);
+            opacity: 0; transform: translateY(-6px); pointer-events: none;
+            transition: opacity .18s var(--ease), transform .18s var(--ease);
+        }
+        .hero-dropdown-menu.open {
+            opacity: 1; transform: none; pointer-events: auto;
+        }
+        .hero-dropdown-item {
+            width: 100%; display: flex; align-items: center; gap: .65rem;
+            padding: .6rem .8rem; font: inherit; font-size: .84rem; font-weight: 500;
+            color: #e4e4e7; background: transparent; border: none; border-radius: 8px;
+            cursor: pointer; text-align: left; transition: all .15s var(--ease);
+        }
+        .hero-dropdown-item:hover {
+            background: rgba(255,255,255,.08); color: #fff;
+        }
+        .hero-dropdown-item.danger {
+            color: #f87171;
+        }
+        .hero-dropdown-item.danger:hover {
+            background: rgba(239,68,68,.14); color: #fca5a5;
+        }
         .btn-act {
             display: inline-flex; align-items: center; gap: .45rem;
             font: inherit; font-size: .84rem; font-weight: 600; padding: .65rem 1.1rem; border-radius: 10px;
@@ -494,6 +729,30 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         .badge-qty { display: inline-flex; align-items: center; gap: .35rem; font-weight: 700; color: #fff; font-size: .95rem; }
         .badge-pending { display: inline-flex; align-items: center; gap: .3rem; font-size: .74rem; font-weight: 600; color: #fbbf24; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.28); padding: .25rem .6rem; border-radius: 999px; }
         .badge-pending::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+
+        table.insumos-table tfoot {
+            border-top: 1px solid var(--border-strong);
+            background: rgba(255, 255, 255, .03);
+        }
+        table.insumos-table tfoot td {
+            padding: 1.15rem 1.15rem;
+            border-bottom: none;
+            vertical-align: middle;
+        }
+        .tfoot-label {
+            text-align: right;
+            font-weight: 700;
+            font-size: .8rem;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: var(--muted);
+        }
+        .tfoot-val {
+            font-size: 1.1rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: .01em;
+        }
 
         .tbl-actions { display: flex; align-items: center; gap: .45rem; justify-content: flex-end; }
         .btn-tbl {
@@ -590,6 +849,315 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         .cal-link { background: none; border: none; color: #a1a1aa; font: inherit; font-size: .78rem; cursor: pointer; font-weight: 600; }
         .cal-link:hover { color: #fff; }
 
+        /* ---------- Botón Blanco FOTOS ---------- */
+        .btn-hero-white {
+            display: inline-flex; align-items: center; gap: .55rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .03em;
+            padding: .62rem 1.25rem; border-radius: 11px;
+            background: #ffffff; color: #09090b; border: 1px solid #ffffff;
+            cursor: pointer; text-decoration: none;
+            box-shadow: 0 4px 18px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .4);
+            transition: all .22s var(--ease);
+        }
+        .btn-hero-white:hover {
+            background: #f4f4f5; color: #000;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(255, 255, 255, .35), 0 3px 8px rgba(0, 0, 0, .5);
+        }
+        .btn-hero-white svg { color: #09090b; transition: transform .2s var(--ease); }
+        .btn-hero-white:hover svg { transform: scale(1.1); }
+
+        /* ---------- Selector de Secciones (Insumos / Fotos) ---------- */
+        .nav-section-tabs {
+            display: flex; gap: .65rem; margin-bottom: 1.75rem;
+            border-bottom: 1px solid var(--border); padding-bottom: .85rem; align-items: center;
+        }
+        .tab-section-btn {
+            display: inline-flex; align-items: center; gap: .55rem;
+            padding: .65rem 1.2rem; border-radius: 10px;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .88rem; font-weight: 600;
+            color: var(--muted); background: transparent; border: 1px solid transparent;
+            text-decoration: none; transition: all .2s var(--ease); cursor: pointer;
+        }
+        .tab-section-btn:hover { color: #fff; background: rgba(255,255,255,.05); }
+        .tab-section-btn.active {
+            color: #fff; background: rgba(255,255,255,.1);
+            border-color: var(--border-strong);
+            box-shadow: 0 4px 14px rgba(0,0,0,.3);
+        }
+        .tab-count-badge {
+            background: rgba(255,255,255,.12); border-radius: 999px;
+            padding: .15rem .55rem; font-size: .74rem; font-weight: 700;
+        }
+        .tab-section-btn.active .tab-count-badge { background: #fff; color: #000; }
+
+        /* ---------- Filtros de Fotos ---------- */
+        .filter-pills { display: flex; gap: .45rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
+        .filter-pill {
+            padding: .4rem .9rem; font-size: .8rem; font-weight: 600;
+            border-radius: 999px; border: 1px solid var(--border);
+            background: rgba(255,255,255,.04); color: var(--muted);
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .filter-pill:hover { color: #fff; background: rgba(255,255,255,.08); }
+        .filter-pill.active {
+            background: #fff; color: #000; font-weight: 700;
+            border-color: #fff; box-shadow: 0 4px 12px rgba(255,255,255,.2);
+        }
+
+        /* ---------- Grid y Cards de Fotos ---------- */
+        .fotos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 1.35rem; animation: rise .45s var(--ease) both;
+        }
+        .foto-card {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            overflow: hidden; display: flex; flex-direction: column;
+            backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            transition: all .25s var(--ease); box-shadow: 0 12px 30px -10px rgba(0,0,0,.5);
+        }
+        .foto-card:hover {
+            transform: translateY(-4px); border-color: var(--border-strong);
+            box-shadow: 0 20px 40px -10px rgba(0,0,0,.75);
+        }
+        .foto-thumb-wrap {
+            position: relative; width: 100%; aspect-ratio: 4 / 3;
+            background: #09090b; overflow: hidden; cursor: pointer;
+        }
+        .foto-thumb-img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform .35s var(--ease); display: block;
+        }
+        .foto-card:hover .foto-thumb-img { transform: scale(1.05); }
+        .foto-thumb-overlay {
+            position: absolute; inset: 0; background: rgba(0,0,0,.45);
+            opacity: 0; display: grid; place-items: center; color: #fff;
+            transition: opacity .2s var(--ease); backdrop-filter: blur(2px);
+        }
+        .foto-card:hover .foto-thumb-overlay { opacity: 1; }
+        .btn-zoom-circle {
+            width: 44px; height: 44px; border-radius: 50%;
+            background: rgba(255,255,255,.9); color: #000;
+            display: grid; place-items: center;
+            box-shadow: 0 8px 20px rgba(0,0,0,.5);
+            transform: scale(.85); transition: transform .2s var(--ease);
+        }
+        .foto-card:hover .btn-zoom-circle { transform: scale(1); }
+        .foto-body {
+            padding: 1rem 1.15rem; display: flex; flex-direction: column;
+            gap: .75rem; flex: 1;
+        }
+        .foto-body-top { display: flex; justify-content: space-between; align-items: center; gap: .6rem; }
+        .badge-tipo {
+            display: inline-flex; align-items: center; gap: .35rem;
+            font-size: .72rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .05em; padding: .3rem .65rem; border-radius: 8px; border: 1px solid transparent;
+        }
+        .badge-tipo-1 { /* Antes de */
+            background: rgba(59, 130, 246, .15); color: #93c5fd; border-color: rgba(59, 130, 246, .35);
+        }
+        .badge-tipo-2 { /* Despues de */
+            background: rgba(16, 185, 129, .15); color: #6ee7b7; border-color: rgba(16, 185, 129, .35);
+        }
+        .badge-tipo-3 { /* Actual */
+            background: rgba(168, 85, 247, .15); color: #d8b4fe; border-color: rgba(168, 85, 247, .35);
+        }
+        .foto-date { display: flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); }
+        .foto-footer {
+            display: flex; justify-content: space-between; align-items: center;
+            border-top: 1px solid var(--border); padding-top: .75rem; margin-top: auto;
+        }
+        .empty-icon-camera {
+            background: linear-gradient(135deg, rgba(0,112,243,.25), rgba(121,40,202,.25), rgba(255,0,127,.25)) !important;
+            box-shadow: 0 0 40px rgba(0,112,243,.3) !important;
+        }
+
+        /* ---------- Componentes de Cámara y Carga en Modal ---------- */
+        .dropzone-box {
+            border: 2px dashed var(--border-strong); border-radius: 14px;
+            padding: 2.2rem 1.5rem; text-align: center; background: rgba(255, 255, 255, .02);
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .dropzone-box:hover, .dropzone-box.dragover {
+            border-color: #fff; background: rgba(255, 255, 255, .06);
+        }
+        .dropzone-icon {
+            width: 52px; height: 52px; border-radius: 14px; margin: 0 auto .85rem;
+            display: grid; place-items: center; background: rgba(255,255,255,.06);
+            color: #fff; border: 1px solid var(--border);
+        }
+        .camera-box {
+            position: relative; width: 100%; aspect-ratio: 4 / 3; max-height: 330px;
+            background: #09090b; border-radius: 14px; overflow: hidden;
+            border: 1px solid var(--border-strong); display: flex;
+            align-items: center; justify-content: center;
+        }
+        .camera-video { width: 100%; height: 100%; object-fit: cover; }
+        .camera-controls-bar {
+            position: absolute; bottom: 12px; left: 0; right: 0;
+            display: flex; justify-content: center; align-items: center; gap: 1.25rem; z-index: 10;
+        }
+        .btn-shutter {
+            width: 58px; height: 58px; border-radius: 50%; background: #fff;
+            border: 4px solid rgba(255,255,255,.5); cursor: pointer;
+            box-shadow: 0 0 24px rgba(255,255,255,.7);
+            transition: transform .15s var(--ease), background .15s;
+        }
+        .btn-shutter:hover { transform: scale(1.08); background: #e4e4e7; }
+        .btn-shutter:active { transform: scale(.94); }
+        .btn-cam-ctrl {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: rgba(0,0,0,.65); border: 1px solid rgba(255,255,255,.3);
+            color: #fff; display: grid; place-items: center; cursor: pointer;
+            backdrop-filter: blur(6px); transition: all .2s var(--ease);
+        }
+        .btn-cam-ctrl:hover { background: rgba(255,255,255,.2); }
+
+        .photo-preview-wrap {
+            position: relative; width: 100%; max-height: 290px;
+            border-radius: 14px; overflow: hidden; border: 1px solid var(--border-strong);
+            background: #09090b; text-align: center;
+        }
+        .photo-preview-img {
+            max-width: 100%; max-height: 290px; object-fit: contain; display: block; margin: 0 auto;
+        }
+        .preview-meta {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: .6rem .85rem; background: rgba(255,255,255,.05);
+            font-size: .8rem; color: var(--muted); border-radius: 9px; margin-top: .75rem;
+        }
+
+        /* ---------- Lightbox Modal ---------- */
+        .lightbox-modal {
+            position: fixed; inset: 0; z-index: 120;
+            background: rgba(0,0,0,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            display: flex; flex-direction: column;
+            opacity: 0; visibility: hidden; transition: opacity .25s var(--ease), visibility .25s;
+        }
+        .lightbox-modal.open { opacity: 1; visibility: visible; }
+        .lightbox-topbar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1rem 1.75rem; border-bottom: 1px solid var(--border);
+            background: rgba(18,18,22,.6);
+        }
+        .lightbox-content {
+            flex: 1; display: grid; place-items: center; padding: 1.5rem; overflow: hidden;
+        }
+        .lightbox-img {
+            max-width: 90vw; max-height: 82vh; object-fit: contain; border-radius: 12px;
+            box-shadow: 0 25px 60px rgba(0,0,0,.95);
+        }
+
+        /* ---------- Barra Porcentual de Avance (Cápsula Neón idéntica al diseño) ---------- */
+        .partida-progress-container {
+            margin-top: 1.15rem;
+            width: 100%;
+            max-width: 320px;
+        }
+        .progress-pill-track {
+            position: relative;
+            display: flex;
+            align-items: center;
+            height: 38px;
+            width: 100%;
+            background: #1e2024;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 9999px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.25);
+            cursor: default;
+            user-select: none;
+        }
+        .progress-pill-fill {
+            position: relative;
+            height: 100%;
+            min-width: 0;
+            border-radius: 9999px;
+            background: linear-gradient(90deg, #2ae083 0%, #1fd79b 50%, #12caba 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: width .45s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 0 20px rgba(42, 224, 131, 0.35);
+        }
+        .progress-pill-text {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.05rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            line-height: 1;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .progress-pill-text.in-fill {
+            color: #074933;
+            padding: 0 1rem;
+        }
+        .progress-pill-text.outside-fill {
+            color: #2ae083;
+            margin-left: .95rem;
+            text-shadow: 0 0 10px rgba(42, 224, 131, 0.4);
+        }
+
+        /* Controles de Avance en Modal */
+        .range-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 9px;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.12);
+            outline: none;
+            transition: background .2s;
+        }
+        .range-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #2ae083, #12caba);
+            cursor: pointer;
+            box-shadow: 0 0 14px rgba(42, 224, 131, 0.65);
+            border: 2px solid #fff;
+            transition: transform .15s var(--ease);
+        }
+        .range-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+        .range-slider::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #2ae083, #12caba);
+            cursor: pointer;
+            box-shadow: 0 0 14px rgba(42, 224, 131, 0.65);
+            border: 2px solid #fff;
+        }
+        .quick-pct-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: .5rem;
+        }
+        .btn-quick-pct {
+            padding: .5rem .25rem;
+            font-size: .84rem;
+            font-weight: 700;
+            color: #e4e4e7;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            cursor: pointer;
+            transition: all .15s var(--ease);
+        }
+        .btn-quick-pct:hover {
+            background: rgba(42, 224, 131, 0.15);
+            border-color: #2ae083;
+            color: #2ae083;
+            transform: translateY(-1px);
+        }
+
         @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
         @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 
@@ -599,6 +1167,7 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
             .section-header-row > * { width: 100%; }
             .search-box input { width: 100%; min-width: 0; }
             .form-grid { grid-template-columns: 1fr; }
+            .fotos-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -641,7 +1210,13 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                 <span class="sep">/</span>
                 <a href="obra.php?id=<?= $idObra ?>"><?= htmlspecialchars($partida['obrNombreObra']) ?></a>
                 <span class="sep">/</span>
-                <span class="current">Partida: <?= htmlspecialchars($partida['pdoClave'] ?: 'S/C') ?></span>
+                <?php if ($seccionActiva === 'fotos'): ?>
+                    <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos">Partida: <?= htmlspecialchars($partida['pdoClave'] ?: 'S/C') ?></a>
+                    <span class="sep">/</span>
+                    <span class="current">Fotos</span>
+                <?php else: ?>
+                    <span class="current">Partida: <?= htmlspecialchars($partida['pdoClave'] ?: 'S/C') ?></span>
+                <?php endif; ?>
             </nav>
 
             <!-- Mensajes Flash -->
@@ -676,22 +1251,75 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                                 <span>Contrato: <?= htmlspecialchars($partida['obrContrato']) ?></span>
                             <?php endif; ?>
                         </div>
+
+                        <!-- Barra Porcentual de Avance (Diseño Cápsula Neón - Estática) -->
+                        <div class="partida-progress-container" aria-label="Avance físico de la partida: <?= $porcentajeAvance ?>%">
+                            <div class="progress-pill-track" id="partidaProgressTrack" role="progressbar" aria-valuenow="<?= $porcentajeAvance ?>" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-pill-fill" id="partidaProgressFill" style="width: <?= $porcentajeAvance ?>%;">
+                                    <?php if ($porcentajeAvance >= 14): ?>
+                                        <span class="progress-pill-text in-fill"><?= $porcentajeAvance ?>%</span>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if ($porcentajeAvance < 14): ?>
+                                    <span class="progress-pill-text outside-fill"><?= $porcentajeAvance ?>%</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     </div>
 
-                    <!-- Botones trasladados de la tarjeta -->
+                    <!-- Acciones del Hero: Botón Blanco FOTOS y Menú de opciones de partida -->
                     <div class="hero-actions">
-                        <?php if ($perm['modificar']): ?>
-                            <button type="button" class="btn-act js-editar-partida" id="btnEditarPartida" title="Editar datos de esta partida">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                                <span>Editar Partida</span>
-                            </button>
+                        <?php if ($seccionActiva === 'fotos'): ?>
+                            <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="btn-hero-white" id="btnToggleSeccion" title="Ver Insumos de la partida">
+                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                                    <line x1="12" y1="22.08" x2="12" y2="12"/>
+                                </svg>
+                                <span>INSUMOS</span>
+                            </a>
+                        <?php else: ?>
+                            <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="btn-hero-white" id="btnIrFotos" title="Ver Fotografías de la partida">
+                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                    <circle cx="12" cy="13" r="4"/>
+                                </svg>
+                                <span>FOTOS</span>
+                            </a>
                         <?php endif; ?>
 
-                        <?php if ($perm['eliminar']): ?>
-                            <button type="button" class="btn-act danger js-eliminar-partida" id="btnEliminarPartida" title="Eliminar partida">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                                <span>Eliminar Partida</span>
-                            </button>
+                        <?php if ($perm['modificar'] || $perm['eliminar']): ?>
+                            <div class="hero-menu-wrap" id="heroMenuWrap">
+                                <button type="button" class="btn-dots" id="btnHeroDots" aria-haspopup="true" aria-expanded="false" title="Más opciones de la partida">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="5" r="1.8"/>
+                                        <circle cx="12" cy="12" r="1.8"/>
+                                        <circle cx="12" cy="19" r="1.8"/>
+                                    </svg>
+                                </button>
+                                <div class="hero-dropdown-menu" id="heroDropdownMenu" role="menu">
+                                    <?php if ($perm['modificar']): ?>
+                                        <button type="button" class="hero-dropdown-item js-avance-partida" id="btnAvancePartida" role="menuitem">
+                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                                <line x1="18" y1="20" x2="18" y2="10"/>
+                                                <line x1="12" y1="20" x2="12" y2="4"/>
+                                                <line x1="6" y1="20" x2="6" y2="14"/>
+                                            </svg>
+                                            <span>Avance</span>
+                                        </button>
+                                        <button type="button" class="hero-dropdown-item js-editar-partida" id="btnEditarPartida" role="menuitem">
+                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                            <span>Editar partida</span>
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if ($perm['eliminar']): ?>
+                                        <button type="button" class="hero-dropdown-item danger js-eliminar-partida" id="btnEliminarPartida" role="menuitem">
+                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                                            <span>Eliminar partida</span>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -710,16 +1338,39 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                         <span class="val"><?= $partidaDias !== null ? "{$partidaDias} días" : 'Sin definir' ?></span>
                     </div>
                     <div class="stat-item">
+                        <span class="lbl">Avance Físico</span>
+                        <span class="val" id="statAvanceFisico" style="color: #2ae083;"><?= $porcentajeAvance ?>%</span>
+                    </div>
+                    <div class="stat-item">
                         <span class="lbl">Total Insumos</span>
                         <span class="val" id="statTotalInsumos"><?= $totalInsumos ?></span>
                     </div>
                     <div class="stat-item">
-                        <span class="lbl">Suma Unidades</span>
-                        <span class="val"><?= number_format($sumaCantidad) ?></span>
+                        <span class="lbl">Total Fotos</span>
+                        <span class="val" id="statTotalFotos"><?= $totalFotos ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Costo Total Insumos</span>
+                        <span class="val" id="statCostoTotal">$<?= number_format($granTotalCosto, 2) ?></span>
                     </div>
                 </div>
             </section>
 
+            <!-- Selector de Secciones (Insumos / Fotos) -->
+            <div class="nav-section-tabs" role="tablist" aria-label="Secciones de la partida">
+                <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="tab-section-btn <?= $seccionActiva === 'insumos' ? 'active' : '' ?>">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                    <span>Insumos</span>
+                    <span class="tab-count-badge"><?= $totalInsumos ?></span>
+                </a>
+                <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="tab-section-btn <?= $seccionActiva === 'fotos' ? 'active' : '' ?>">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    <span>Fotografías</span>
+                    <span class="tab-count-badge"><?= $totalFotos ?></span>
+                </a>
+            </div>
+
+            <?php if ($seccionActiva === 'insumos'): ?>
             <!-- Sección de Insumos -->
             <section aria-labelledby="secInsumosTitle">
                 <div class="section-header-row">
@@ -768,18 +1419,24 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                                         <th>Unidad de Medida</th>
                                         <th>Cantidad</th>
                                         <th>Saldo</th>
-                                        <th>Costo</th>
+                                        <th style="text-align: right;">Costo Unitario</th>
+                                        <th style="text-align: right;">Costo Total</th>
                                         <?php if ($perm['modificar'] || $perm['eliminar']): ?>
                                             <th style="text-align: right;">Acciones</th>
                                         <?php endif; ?>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($insumosAsignados as $ins): ?>
+                                    <?php foreach ($insumosAsignados as $ins): 
+                                        $costoUnit = (float)($ins['opiCostoUnitario'] ?? 0);
+                                        $costoTot  = (int)$ins['opiCantidad'] * $costoUnit;
+                                    ?>
                                         <tr data-search="<?= htmlspecialchars(mb_strtolower(($ins['imoDescripcion'] ?? '') . ' ' . ($ins['umeDescripcion'] ?? ''))) ?>"
                                             data-id="<?= (int)$ins['idPartidaInsumos'] ?>"
                                             data-desc="<?= htmlspecialchars($ins['imoDescripcion']) ?>"
-                                            data-qty="<?= (int)$ins['opiCantidad'] ?>">
+                                            data-qty="<?= (int)$ins['opiCantidad'] ?>"
+                                            data-costo="<?= $costoUnit ?>"
+                                            data-costo-total="<?= $costoTot ?>">
                                             <td>
                                                 <div class="insumo-name"><?= htmlspecialchars($ins['imoDescripcion']) ?></div>
                                             </td>
@@ -796,17 +1453,25 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                                                     <?= number_format((int)$ins['opiSaldo']) ?>
                                                 </span>
                                             </td>
-                                            <td>
-                                                <span class="badge-pending" title="Costo pendiente por definir">Pendiente</span>
+                                            <td style="text-align: right;">
+                                                <span style="font-weight: 600; color: #e4e4e7; font-size: .92rem;">
+                                                    $<?= number_format($costoUnit, 2) ?>
+                                                </span>
+                                            </td>
+                                            <td style="text-align: right;">
+                                                <span style="font-weight: 700; color: #fff; font-size: .95rem;">
+                                                    $<?= number_format($costoTot, 2) ?>
+                                                </span>
                                             </td>
                                             <?php if ($perm['modificar'] || $perm['eliminar']): ?>
                                                 <td>
                                                     <div class="tbl-actions">
                                                         <?php if ($perm['modificar']): ?>
-                                                            <button type="button" class="btn-tbl js-editar-qty" title="Modificar cantidad"
+                                                            <button type="button" class="btn-tbl js-editar-qty" title="Modificar insumo"
                                                                 data-id="<?= (int)$ins['idPartidaInsumos'] ?>"
                                                                 data-desc="<?= htmlspecialchars($ins['imoDescripcion']) ?>"
-                                                                data-qty="<?= (int)$ins['opiCantidad'] ?>">
+                                                                data-qty="<?= (int)$ins['opiCantidad'] ?>"
+                                                                data-costo="<?= $costoUnit ?>">
                                                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                                                             </button>
                                                         <?php endif; ?>
@@ -824,12 +1489,150 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
+                                <tfoot>
+                                    <tr class="tfoot-total-row">
+                                        <td colspan="4" class="tfoot-label">
+                                            Total Insumos Partida:
+                                        </td>
+                                        <td style="text-align: right; color: var(--subtle); font-size: .75rem;">
+                                            —
+                                        </td>
+                                        <td style="text-align: right;" class="tfoot-val" id="totalCostosInsumos">
+                                            $<?= number_format($granTotalCosto, 2) ?>
+                                        </td>
+                                        <?php if ($perm['modificar'] || $perm['eliminar']): ?>
+                                            <td></td>
+                                        <?php endif; ?>
+                                    </tr>
+                                </tfoot>
                             </table>
                         </div>
                         <p class="no-results" id="noResultsInsumos">No se encontraron insumos con ese criterio.</p>
                     </div>
                 <?php endif; ?>
             </section>
+            <?php else: ?>
+            <!-- Sección de Fotografías -->
+            <section aria-labelledby="secFotosTitle" id="secFotos">
+                <div class="section-header-row">
+                    <div>
+                        <h2 id="secFotosTitle" style="font-size: 1.35rem; color: #fff; margin-bottom: .25rem;">Fotografías de la Partida</h2>
+                        <p style="color: var(--muted); font-size: .88rem;">Registro y evidencia visual de la partida (Antes de, Actual y Después de).</p>
+                    </div>
+
+                    <div style="display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;">
+                        <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                            <button type="button" class="btn btn-primary js-abrir-foto" id="btnAgregarFoto" style="width: auto; padding: .65rem 1.35rem; font-size: .88rem;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/><line x1="12" y1="9" x2="12" y2="17"/><line x1="8" y1="13" x2="16" y2="13"/></svg>
+                                <span>Agregar foto</span>
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <?php if (empty($fotosPartida)): ?>
+                    <div class="empty-insumos">
+                        <div class="empty-icon empty-icon-camera">
+                            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        </div>
+                        <h3>Esta partida aún no tiene ninguna foto.</h3>
+                        <p>Adjunta archivos o toma fotografías directamente con tu cámara para documentar el progreso, antecedentes y resultados de esta partida.</p>
+                        <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                            <button type="button" class="btn btn-primary js-abrir-foto" id="btnPrimerFoto" style="width: auto; padding: .8rem 1.7rem; font-size: .92rem;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                                <span>+ Agregar primer foto</span>
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <!-- Filtros por tipo de foto -->
+                    <div class="filter-pills" id="fotoFilters" role="tablist">
+                        <button type="button" class="filter-pill active" data-filter="all">Todas (<?= $totalFotos ?>)</button>
+                        <?php
+                            $conteoPorTipo = [];
+                            foreach ($fotosPartida as $fp) {
+                                $t = (int)($fp['pdfTipo'] ?? 0);
+                                $conteoPorTipo[$t] = ($conteoPorTipo[$t] ?? 0) + 1;
+                            }
+                            foreach ($catalogoTiposFotos as $ctf):
+                                $tipoId = (int)$ctf['pdfTipo'];
+                                $cnt = $conteoPorTipo[$tipoId] ?? 0;
+                        ?>
+                            <button type="button" class="filter-pill" data-filter="<?= $tipoId ?>">
+                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)
+                            </button>
+                        <?php endforeach; ?>
+                    </div>
+
+                    <div class="fotos-grid" id="fotosGrid">
+                        <?php foreach ($fotosPartida as $foto): 
+                            $tipoId = (int)($foto['pdfTipo'] ?? 0);
+                            $tipoDesc = $foto['pdftDescripcion'] ?: 'Fotografía';
+                            $imgSrc = "partida.php?id={$idPartida}&ver_foto=" . (int)$foto['idPartidaFoto'];
+                            $tipoBadgeCls = 'badge-tipo-' . $tipoId;
+                            $pesoKb = !empty($foto['fotoSize']) ? round((int)$foto['fotoSize'] / 1024) : 0;
+                            $fotoDesc = trim((string)($foto['pdfDescripcion'] ?? ''));
+                        ?>
+                            <div class="foto-card" data-tipo="<?= $tipoId ?>">
+                                <div class="foto-thumb-wrap js-lightbox-trigger"
+                                     data-src="<?= $imgSrc ?>"
+                                     data-title="<?= htmlspecialchars($tipoDesc) ?>"
+                                     data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                     data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                     title="Ver en pantalla completa">
+                                    <img src="<?= $imgSrc ?>" alt="<?= htmlspecialchars($fotoDesc ?: $tipoDesc) ?>" class="foto-thumb-img" loading="lazy">
+                                    <div class="foto-thumb-overlay">
+                                        <div class="btn-zoom-circle">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="foto-body">
+                                    <div class="foto-body-top">
+                                        <span class="badge-tipo <?= $tipoBadgeCls ?>">
+                                            <?= htmlspecialchars($tipoDesc) ?>
+                                        </span>
+                                        <?php if ($pesoKb > 0): ?>
+                                            <span style="font-size: .72rem; color: var(--subtle); font-weight: 600;"><?= $pesoKb ?> KB</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if ($fotoDesc !== ''): ?>
+                                        <div class="foto-desc" style="font-size: .88rem; color: #f4f4f5; line-height: 1.45; font-weight: 500; word-break: break-word; margin: .15rem 0 .25rem;">
+                                            <?= nl2br(htmlspecialchars($fotoDesc)) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <div class="foto-date">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                        <span><?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?></span>
+                                    </div>
+                                    <div class="foto-footer">
+                                        <button type="button" class="btn-act js-lightbox-trigger"
+                                                data-src="<?= $imgSrc ?>"
+                                                data-title="<?= htmlspecialchars($tipoDesc) ?>"
+                                                data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                                data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                                style="padding: .45rem .85rem; font-size: .78rem;">
+                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                                            <span>Ampliar</span>
+                                        </button>
+                                        <?php if ($perm['eliminar']): ?>
+                                            <button type="button" class="btn-tbl danger js-eliminar-foto"
+                                                    data-id="<?= (int)$foto['idPartidaFoto'] ?>"
+                                                    data-tipo="<?= htmlspecialchars($tipoDesc) ?>"
+                                                    data-date="<?= htmlspecialchars(fmt_date_time($foto['pdfFecha'])) ?>"
+                                                    data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                                    title="Eliminar fotografía">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                            </button>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </section>
+            <?php endif; ?>
         </main>
     </div>
 
@@ -906,13 +1709,11 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                         <p class="form-hint">El saldo inicial de la partida tomará esta misma cantidad automáticamente.</p>
                     </div>
 
-                    <!-- Costo recordatorio -->
-                    <div class="full" style="background: rgba(245,158,11,.06); border: 1px dashed rgba(245,158,11,.3); border-radius: 10px; padding: .75rem 1rem;">
-                        <div style="display: flex; align-items: center; gap: .5rem; color: #fbbf24; font-size: .82rem; font-weight: 600;">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            <span>Costo del insumo: Pendiente</span>
-                        </div>
-                        <p style="font-size: .75rem; color: var(--muted); margin: .3rem 0 0 1.5rem;">El cálculo y asignación de costos unitarios se integrará en la siguiente fase.</p>
+                    <!-- Costo Unitario -->
+                    <div class="full">
+                        <label class="form-label" for="opiCostoUnitario">Costo unitario ($) <span class="req">*</span></label>
+                        <input type="number" class="input-control" id="opiCostoUnitario" name="opiCostoUnitario" min="0" step="0.01" placeholder="Ej. 150.00" required>
+                        <p class="form-hint">Costo unitario del insumo para el cálculo de costos de la partida.</p>
                     </div>
                 </div>
 
@@ -928,13 +1729,13 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
     </div>
 
     <!-- ========================================================================= -->
-    <!-- MODAL: EDITAR CANTIDAD DE INSUMO                                          -->
+    <!-- MODAL: MODIFICAR INSUMO (CANTIDAD Y COSTO UNITARIO)                       -->
     <!-- ========================================================================= -->
     <div class="modal-backdrop" id="modalEditarQty" role="dialog" aria-modal="true" aria-labelledby="modalQtyTitle">
         <div class="modal modal-sm">
             <div class="modal-head">
                 <div>
-                    <h2 id="modalQtyTitle">Modificar cantidad</h2>
+                    <h2 id="modalQtyTitle">Modificar insumo</h2>
                     <p id="modalQtyDesc" style="color: var(--muted); font-size: .84rem;"></p>
                 </div>
                 <button type="button" class="modal-close js-close" aria-label="Cerrar">
@@ -951,6 +1752,12 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                     <label class="form-label" for="editQtyInput">Nueva cantidad <span class="req">*</span></label>
                     <input type="number" class="input-control" id="editQtyInput" name="opiCantidad" min="1" step="1" required>
                     <p class="form-hint">El saldo del insumo se ajustará de acuerdo a la diferencia.</p>
+                </div>
+
+                <div style="margin: 1.25rem 0; text-align: left;">
+                    <label class="form-label" for="editCostoInput">Costo unitario ($) <span class="req">*</span></label>
+                    <input type="number" class="input-control" id="editCostoInput" name="opiCostoUnitario" min="0" step="0.01" placeholder="0.00" required>
+                    <p class="form-hint">Costo por unidad de este insumo en la partida.</p>
                 </div>
 
                 <div class="modal-actions" style="justify-content: center;">
@@ -989,6 +1796,86 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
     <!-- MODAL: EDITAR PARTIDA (TRASLADADO DE OBRA.PHP)                             -->
     <!-- ========================================================================= -->
     <?php if ($perm['modificar']): ?>
+    <!-- ========================================================================= -->
+    <!-- MODAL: MODIFICAR AVANCE DE LA PARTIDA                                      -->
+    <!-- ========================================================================= -->
+    <div class="modal-backdrop" id="modalAvance" role="dialog" aria-modal="true" aria-labelledby="modalAvanceTitle">
+        <div class="modal modal-sm">
+            <div class="modal-head">
+                <div>
+                    <h2 id="modalAvanceTitle">Avance de la Partida</h2>
+                    <p style="color: var(--muted); font-size: .84rem;">Ajusta el porcentaje de avance físico</p>
+                </div>
+                <button type="button" class="modal-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+
+            <div class="alert alert-error modal-error" id="modalAvanceError" role="alert">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span id="modalAvanceErrorText"></span>
+            </div>
+
+            <form method="POST" action="partida.php?id=<?= $idPartida ?><?= $seccionActiva === 'fotos' ? '&seccion=fotos' : '' ?>" id="formAvance">
+                <input type="hidden" name="action" value="actualizar_avance">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
+                <input type="hidden" name="idPartidaObra" value="<?= $idPartida ?>">
+
+                <!-- Vista previa en vivo -->
+                <div style="margin: 1.25rem 0 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .6rem;">
+                        <span style="font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); font-weight: 700;">Vista previa</span>
+                        <strong id="previewAvanceLabel" style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; color: #2ae083;"><?= $porcentajeAvance ?>%</strong>
+                    </div>
+                    <div class="progress-pill-track preview-track" style="width: 100%; max-width: 100%; margin: 0;">
+                        <div class="progress-pill-fill" id="previewAvanceFill" style="width: <?= $porcentajeAvance ?>%;">
+                            <span class="progress-pill-text in-fill" id="previewAvanceTextIn" style="<?= $porcentajeAvance < 14 ? 'display:none;' : '' ?>"><?= $porcentajeAvance ?>%</span>
+                        </div>
+                        <span class="progress-pill-text outside-fill" id="previewAvanceTextOut" style="<?= $porcentajeAvance >= 14 ? 'display:none;' : '' ?>"><?= $porcentajeAvance ?>%</span>
+                    </div>
+                </div>
+
+                <!-- Input numérico y slider -->
+                <div style="margin-bottom: 1.35rem;">
+                    <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div style="flex: 1;">
+                            <label class="form-label" for="inputAvanceRange">Deslizar para ajustar</label>
+                            <input type="range" class="range-slider" id="inputAvanceRange" min="0" max="100" step="1" value="<?= $porcentajeAvance ?>" style="margin-top: .4rem;">
+                        </div>
+                        <div style="width: 110px;">
+                            <label class="form-label" for="inputAvanceVal">Valor (%)</label>
+                            <div style="position: relative;">
+                                <input type="number" class="input-control" id="inputAvanceVal" name="pdoAvance" min="0" max="100" step="1" value="<?= $porcentajeAvance ?>" required style="padding-right: 2rem; font-weight: 700; text-align: right; font-size: 1.05rem;">
+                                <span style="position: absolute; right: .75rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 800; pointer-events: none;">%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Botones de acceso rápido -->
+                    <label class="form-label" style="margin-bottom: .45rem;">Accesos rápidos</label>
+                    <div class="quick-pct-grid">
+                        <button type="button" class="btn-quick-pct" data-val="0">0%</button>
+                        <button type="button" class="btn-quick-pct" data-val="25">25%</button>
+                        <button type="button" class="btn-quick-pct" data-val="50">50%</button>
+                        <button type="button" class="btn-quick-pct" data-val="75">75%</button>
+                        <button type="button" class="btn-quick-pct" data-val="100">100%</button>
+                    </div>
+                </div>
+
+                <div class="modal-actions" style="justify-content: flex-end; gap: .75rem;">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .8rem 1.3rem;">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" id="btnGuardarAvance" style="width: auto; padding: .8rem 1.8rem; background: linear-gradient(135deg, #10b981, #059669); border-color: #10b981;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Guardar avance</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- MODAL: EDITAR PARTIDA (TRASLADADO DE OBRA.PHP)                             -->
+    <!-- ========================================================================= -->
     <div class="modal-backdrop" id="modalEditarPartida" role="dialog" aria-modal="true" aria-labelledby="modalEditPartidaTitle">
         <div class="modal">
             <div class="modal-head">
@@ -1083,6 +1970,172 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         </div>
     </div>
     <?php endif; ?>
+    <!-- ========================================================================= -->
+    <!-- MODAL: AGREGAR FOTOGRAFÍA (SUBIR ARCHIVO O TOMAR CON CÁMARA)               -->
+    <!-- ========================================================================= -->
+    <?php if ($perm['agregar'] || $perm['modificar']): ?>
+    <div class="modal-backdrop" id="modalAgregarFoto" role="dialog" aria-modal="true" aria-labelledby="modalFotoTitle">
+        <div class="modal" style="max-width: 580px;">
+            <div class="modal-head">
+                <div>
+                    <h2 id="modalFotoTitle">Agregar fotografía</h2>
+                    <p>Partida: <?= htmlspecialchars($partida['pdoClave']) ?> &bull; <?= htmlspecialchars($partida['pdoDescripcion']) ?></p>
+                </div>
+                <button type="button" class="modal-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+
+            <div class="alert alert-error modal-error" id="modalFotoError" role="alert">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span id="modalFotoErrorText"></span>
+            </div>
+
+            <!-- Tabs: Subir Archivo vs Tomar con Cámara -->
+            <div class="tab-pills" role="tablist">
+                <button type="button" class="tab-pill active" id="tabFotoArchivo" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: .3rem;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Adjuntar archivo
+                </button>
+                <button type="button" class="tab-pill" id="tabFotoCamara" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: .3rem;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    Tomar con cámara
+                </button>
+            </div>
+
+            <form method="POST" action="partida.php?id=<?= $idPartida ?>" id="formFoto" enctype="multipart/form-data" novalidate>
+                <input type="hidden" name="action" value="agregar_foto">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
+                <input type="hidden" name="idPartidaObra" value="<?= $idPartida ?>">
+                <input type="hidden" name="fotoBase64" id="fotoBase64Input" value="">
+
+                <!-- Panel 1: Subir Archivo -->
+                <div id="panelFotoArchivo">
+                    <div class="dropzone-box" id="dropzoneFoto">
+                        <div class="dropzone-icon">
+                            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                        </div>
+                        <p style="font-weight: 600; color: #fff; margin-bottom: .25rem; font-size: .95rem;">Arrastra tu fotografía aquí o haz clic para explorar</p>
+                        <p style="font-size: .78rem; color: var(--muted); margin: 0;">Formatos JPG, PNG, WEBP (se optimizará y comprimirá automáticamente)</p>
+                    </div>
+                    <input type="file" id="inpFotoFile" accept="image/*" style="display: none;">
+                </div>
+
+                <!-- Panel 2: Tomar Fotografía con la Cámara -->
+                <div id="panelFotoCamara" style="display: none;">
+                    <div class="camera-box" id="cameraBox">
+                        <video id="cameraVideo" class="camera-video" autoplay playsinline muted></video>
+                        <div id="cameraStatusMsg" style="position: absolute; text-align: center; color: var(--muted); padding: 1.5rem; display: none;">
+                            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: .5rem; color: #fbbf24;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            <p id="cameraStatusTxt" style="font-size: .88rem; color: #e4e4e7; margin: 0 0 .75rem;">Solicitando permiso de cámara...</p>
+                            <button type="button" class="btn btn-ghost" id="btnRetryCam" style="padding: .4rem .9rem; font-size: .8rem;">Reintentar</button>
+                        </div>
+                        <div class="camera-controls-bar" id="cameraControls">
+                            <button type="button" class="btn-cam-ctrl" id="btnCamSwitch" title="Cambiar cámara (frontal/trasera)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 1.954.702 3.744 1.872 5.143L4 18h5v-5l-1.854 1.854C6.386 13.824 6 12.474 6 10c0-3.314 2.686-6 6-6s6 2.686 6 6c0 2.474-.386 3.824-1.146 4.854L15 13v5h5l-1.872-2.857C19.298 13.744 20 11.954 20 10z"/></svg>
+                            </button>
+                            <button type="button" class="btn-shutter" id="btnShutter" title="Tomar fotografía" aria-label="Tomar fotografía"></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Preview de la foto capturada o seleccionada -->
+                <div id="panelFotoPreview" style="display: none; margin-top: .75rem;">
+                    <div class="photo-preview-wrap">
+                        <img id="photoPreviewImg" class="photo-preview-img" alt="Vista previa">
+                    </div>
+                    <div class="preview-meta">
+                        <span id="previewInfo">Foto lista para guardar</span>
+                        <button type="button" class="btn-act" id="btnCambiarFoto" style="padding: .35rem .75rem; font-size: .78rem;">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                            <span>Cambiar / Reintentar</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Selector de Tipo de Fotografía (obrapartidasfotostipo) -->
+                <div style="margin-top: 1.35rem;">
+                    <label class="form-label" for="pdfTipoSelect">Tipo de fotografía <span class="req">*</span></label>
+                    <select class="input-control" id="pdfTipoSelect" name="pdfTipo" required>
+                        <option value="">-- Selecciona el tipo de fotografía --</option>
+                        <?php foreach ($catalogoTiposFotos as $ctf): ?>
+                            <option value="<?= (int)$ctf['pdfTipo'] ?>">
+                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="form-hint">Clasificación de la imagen: evidencia previa (Antes de), avance en curso (Actual) o conclusión (Después de).</p>
+                </div>
+
+                <!-- Descripción de la fotografía (pdfDescripcion) -->
+                <div style="margin-top: 1.15rem;">
+                    <label class="form-label" for="pdfDescripcion">
+                        Descripción de la fotografía
+                        <span class="char-count" id="fotoDescCount">0/400</span>
+                    </label>
+                    <textarea class="input-control" id="pdfDescripcion" name="pdfDescripcion" maxlength="400" rows="3" placeholder="Describe brevemente lo que muestra la fotografía (ej. Armado de varilla, colado de losa, avance al 50%)..."></textarea>
+                    <p class="form-hint">Pequeña descripción u observación sobre la fotografía (máx. 400 caracteres).</p>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .8rem 1.3rem;">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" id="btnGuardarFoto" style="width: auto; padding: .8rem 1.8rem;">
+                        <span class="spinner" aria-hidden="true"></span>
+                        <span class="label">Guardar fotografía</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- MODAL: ELIMINAR FOTOGRAFÍA                                                -->
+    <!-- ========================================================================= -->
+    <div class="modal-backdrop" id="modalEliminarFoto" role="alertdialog" aria-modal="true" aria-labelledby="modalEliminarFotoTitle">
+        <div class="modal modal-sm">
+            <div class="danger-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <h2 id="modalEliminarFotoTitle" style="font-size: 1.2rem; color: #fff; margin-bottom: .5rem;">¿Eliminar esta fotografía?</h2>
+            <p style="color: var(--muted); font-size: .88rem; line-height: 1.55;" id="eliminarFotoTexto"></p>
+            <form method="POST" action="partida.php?id=<?= $idPartida ?>">
+                <input type="hidden" name="action" value="eliminar_foto">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
+                <input type="hidden" name="idPartidaObra" value="<?= $idPartida ?>">
+                <input type="hidden" name="idPartidaFoto" id="eliminarFotoId" value="0">
+                <div class="modal-actions" style="justify-content: center;">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .8rem 1.3rem;">Cancelar</button>
+                    <button type="submit" class="btn btn-primary btn-danger" style="width: auto; padding: .8rem 1.6rem;">Sí, eliminar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ========================================================================= -->
+    <!-- MODAL: LIGHTBOX / PANTALLA COMPLETA DE FOTO                               -->
+    <!-- ========================================================================= -->
+    <div class="lightbox-modal" id="modalLightbox" role="dialog" aria-modal="true" aria-label="Visualizador de Fotografía">
+        <div class="lightbox-topbar">
+            <div>
+                <strong id="lightboxTitle" style="color: #fff; font-size: 1.05rem; display: block;">Fotografía</strong>
+                <span id="lightboxDate" style="color: var(--muted); font-size: .82rem;"></span>
+                <p id="lightboxDesc" style="color: #f4f4f5; font-size: .88rem; margin: .35rem 0 0; display: none;"></p>
+            </div>
+            <div style="display: flex; gap: .75rem; align-items: center;">
+                <a href="#" id="lightboxDownload" download="fotografia-partida.jpg" class="btn-act" style="padding: .5rem 1rem; font-size: .82rem;" title="Descargar imagen">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Descargar</span>
+                </a>
+                <button type="button" class="modal-close js-lightbox-close" aria-label="Cerrar visualizador">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="lightbox-content" id="lightboxContent">
+            <img src="" id="lightboxImg" class="lightbox-img" alt="Fotografía en alta resolución">
+        </div>
+    </div>
 
     <script>
     (() => {
@@ -1102,7 +2155,15 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
 
         // ---------------- Control de Modales ----------------
         const openModal = m => { if (!m) return; m.classList.add('open'); document.body.style.overflow = 'hidden'; };
-        const closeModal = m => { if (!m) return; m.classList.remove('open'); document.body.style.overflow = ''; closeAllCalendars(); };
+        const closeModal = m => {
+            if (!m) return;
+            m.classList.remove('open');
+            document.body.style.overflow = '';
+            closeAllCalendars();
+            if (m.id === 'modalAgregarFoto' && typeof stopCamera === 'function') {
+                stopCamera();
+            }
+        };
         document.querySelectorAll('.modal-backdrop').forEach(m => {
             m.addEventListener('mousedown', e => { if (e.target === m) closeModal(m); });
             m.querySelectorAll('.js-close').forEach(b => b.addEventListener('click', () => closeModal(m)));
@@ -1110,6 +2171,14 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         document.addEventListener('keydown', e => {
             if (e.key !== 'Escape') return;
             if (document.querySelector('.calendar.open')) { closeAllCalendars(); return; }
+            const lb = document.getElementById('modalLightbox');
+            if (lb && lb.classList.contains('open')) {
+                lb.classList.remove('open');
+                document.body.style.overflow = '';
+                const img = document.getElementById('lightboxImg');
+                if (img) img.src = '';
+                return;
+            }
             document.querySelectorAll('.modal-backdrop.open').forEach(closeModal);
         });
 
@@ -1237,17 +2306,26 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
         const searchInput = document.getElementById('searchInsumos');
         const rows = document.querySelectorAll('#tablaInsumos tbody tr');
         const noResults = document.getElementById('noResultsInsumos');
+        const totalFooter = document.getElementById('totalCostosInsumos');
+        const tfoot = document.querySelector('#tablaInsumos tfoot');
         if (searchInput && rows.length) {
+            const fmtMoney = n => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             searchInput.addEventListener('input', () => {
                 const q = searchInput.value.trim().toLowerCase();
                 let visible = 0;
+                let visibleTotal = 0;
                 rows.forEach(r => {
                     const text = r.dataset.search || '';
                     const match = !q || text.includes(q);
                     r.style.display = match ? '' : 'none';
-                    if (match) visible++;
+                    if (match) {
+                        visible++;
+                        visibleTotal += parseFloat(r.dataset.costoTotal || 0);
+                    }
                 });
                 if (noResults) noResults.style.display = visible === 0 ? 'block' : 'none';
+                if (tfoot) tfoot.style.display = visible === 0 ? 'none' : '';
+                if (totalFooter) totalFooter.textContent = fmtMoney(visibleTotal);
             });
         }
 
@@ -1264,6 +2342,7 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
             const nuevoDesc = document.getElementById('nuevoImoDescripcion');
             const nuevoUme = document.getElementById('nuevoIdUnidadMedida');
             const inpQty = document.getElementById('opiCantidad');
+            const inpCosto = document.getElementById('opiCostoUnitario');
             const errBox = document.getElementById('modalInsumoError');
             const errText = document.getElementById('modalInsumoErrorText');
             const btnSave = document.getElementById('btnGuardarInsumo');
@@ -1292,6 +2371,7 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
             document.querySelectorAll('.js-abrir-insumo').forEach(btn => {
                 btn.addEventListener('click', () => {
                     formInsumo.reset();
+                    if (inpCosto) inpCosto.value = '';
                     switchTab('existente');
                     errBox.classList.remove('show');
                     btnSave.classList.remove('loading');
@@ -1303,12 +2383,22 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                 errBox.classList.remove('show');
                 const tipo = inpTipo.value;
                 const qty = Number(inpQty.value);
+                const costoVal = inpCosto ? inpCosto.value.trim() : '';
+                const costo = Number(costoVal);
 
                 if (!qty || qty <= 0) {
                     e.preventDefault();
                     errText.textContent = 'Ingresa una cantidad entera mayor a 0.';
                     errBox.classList.add('show');
                     inpQty.focus();
+                    return;
+                }
+
+                if (costoVal === '' || isNaN(costo) || costo < 0) {
+                    e.preventDefault();
+                    errText.textContent = 'Ingresa un costo unitario válido mayor o igual a 0.';
+                    errBox.classList.add('show');
+                    if (inpCosto) inpCosto.focus();
                     return;
                 }
 
@@ -1340,11 +2430,12 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
             });
         }
 
-        // ---------------- Modal: Editar Cantidad Insumo ----------------
+        // ---------------- Modal: Modificar Insumo ----------------
         const modalEditarQty = document.getElementById('modalEditarQty');
         if (modalEditarQty) {
             const editId = document.getElementById('editQtyId');
             const editInput = document.getElementById('editQtyInput');
+            const editCosto = document.getElementById('editCostoInput');
             const editDesc = document.getElementById('modalQtyDesc');
 
             document.querySelectorAll('.js-editar-qty').forEach(btn => {
@@ -1352,6 +2443,10 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                     editId.value = btn.dataset.id;
                     editDesc.textContent = btn.dataset.desc;
                     editInput.value = btn.dataset.qty;
+                    if (editCosto) {
+                        const c = parseFloat(btn.dataset.costo);
+                        editCosto.value = isNaN(c) ? '0.00' : c.toFixed(2);
+                    }
                     openModal(modalEditarQty);
                     setTimeout(() => editInput.focus(), 100);
                 });
@@ -1446,6 +2541,512 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
             btnElimPartida.addEventListener('click', () => openModal(modalEliminarPartida));
         }
 
+        // ---------------- Menú 3 puntos de Partida ----------------
+        const btnHeroDots = document.getElementById('btnHeroDots');
+        const heroDropdownMenu = document.getElementById('heroDropdownMenu');
+        if (btnHeroDots && heroDropdownMenu) {
+            btnHeroDots.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = heroDropdownMenu.classList.toggle('open');
+                btnHeroDots.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!heroDropdownMenu.contains(e.target) && e.target !== btnHeroDots) {
+                    heroDropdownMenu.classList.remove('open');
+                    btnHeroDots.setAttribute('aria-expanded', 'false');
+                }
+            });
+
+            heroDropdownMenu.querySelectorAll('.hero-dropdown-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    heroDropdownMenu.classList.remove('open');
+                    btnHeroDots.setAttribute('aria-expanded', 'false');
+                });
+            });
+        }
+
+        // ---------------- Modal: Avance de la Partida ----------------
+        const modalAvance = document.getElementById('modalAvance');
+        const btnAvancePartida = document.getElementById('btnAvancePartida');
+        if (modalAvance) {
+            const inputVal = document.getElementById('inputAvanceVal');
+            const inputRng = document.getElementById('inputAvanceRange');
+            const prevFill = document.getElementById('previewAvanceFill');
+            const prevTxtIn = document.getElementById('previewAvanceTextIn');
+            const prevTxtOut = document.getElementById('previewAvanceTextOut');
+            const prevLabel = document.getElementById('previewAvanceLabel');
+            const formAvance = document.getElementById('formAvance');
+            const errBoxAvance = document.getElementById('modalAvanceError');
+
+            function syncAvance(val) {
+                let num = parseInt(val, 10);
+                if (isNaN(num)) num = 0;
+                num = Math.max(0, Math.min(100, num));
+                if (inputVal && document.activeElement !== inputVal) inputVal.value = num;
+                if (inputRng && document.activeElement !== inputRng) inputRng.value = num;
+                if (prevLabel) prevLabel.textContent = `${num}%`;
+                if (prevFill) prevFill.style.width = `${num}%`;
+                if (prevTxtIn) {
+                    prevTxtIn.textContent = `${num}%`;
+                    prevTxtIn.style.display = num >= 14 ? '' : 'none';
+                }
+                if (prevTxtOut) {
+                    prevTxtOut.textContent = `${num}%`;
+                    prevTxtOut.style.display = num < 14 ? '' : 'none';
+                }
+            }
+
+            if (inputVal) {
+                inputVal.addEventListener('input', () => {
+                    let num = parseInt(inputVal.value, 10);
+                    if (isNaN(num)) num = 0;
+                    num = Math.max(0, Math.min(100, num));
+                    if (inputRng) inputRng.value = num;
+                    if (prevLabel) prevLabel.textContent = `${num}%`;
+                    if (prevFill) prevFill.style.width = `${num}%`;
+                    if (prevTxtIn) {
+                        prevTxtIn.textContent = `${num}%`;
+                        prevTxtIn.style.display = num >= 14 ? '' : 'none';
+                    }
+                    if (prevTxtOut) {
+                        prevTxtOut.textContent = `${num}%`;
+                        prevTxtOut.style.display = num < 14 ? '' : 'none';
+                    }
+                });
+            }
+            if (inputRng) {
+                inputRng.addEventListener('input', () => {
+                    syncAvance(inputRng.value);
+                });
+            }
+
+            document.querySelectorAll('.btn-quick-pct').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    syncAvance(btn.dataset.val);
+                    if (inputVal) inputVal.value = btn.dataset.val;
+                });
+            });
+
+            function abrirModalAvance() {
+                if (errBoxAvance) errBoxAvance.classList.remove('show');
+                openModal(modalAvance);
+                setTimeout(() => {
+                    if (inputVal) {
+                        inputVal.focus();
+                        inputVal.select();
+                    }
+                }, 120);
+            }
+
+            if (btnAvancePartida) {
+                btnAvancePartida.addEventListener('click', abrirModalAvance);
+            }
+        }
+
+        // =========================================================================
+        // SECCIÓN FOTOGRAFÍAS: COMPRESIÓN, CÁMARA, DROPZONE, LIGHTBOX Y FILTROS
+        // =========================================================================
+
+        // 1. Compresor de imagen en cliente (Canvas) con calidad sin pérdida perceptible
+        function compressImage(source, maxWidth = 1920, maxHeight = 1920, quality = 0.85) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => {
+                    let width = img.naturalWidth || img.width;
+                    let height = img.naturalHeight || img.height;
+
+                    if (width > maxWidth || height > maxHeight) {
+                        if (width / height > maxWidth / maxHeight) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        } else {
+                            width = Math.round((width * maxHeight) / height);
+                            height = maxHeight;
+                        }
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    const estKb = Math.round((dataUrl.length * 3) / 4 / 1024);
+                    resolve({ dataUrl, width, height, estKb });
+                };
+                img.onerror = () => reject(new Error('No se pudo procesar la imagen seleccionada.'));
+
+                if (typeof source === 'string') {
+                    img.src = source;
+                } else if (source instanceof Blob || source instanceof File) {
+                    const reader = new FileReader();
+                    reader.onload = e => { img.src = e.target.result; };
+                    reader.onerror = () => reject(new Error('Error al leer el archivo.'));
+                    reader.readAsDataURL(source);
+                } else {
+                    reject(new Error('Formato de imagen inválido.'));
+                }
+            });
+        }
+
+        // 2. Control de Cámara (navigator.mediaDevices.getUserMedia)
+        let cameraStream = null;
+        let currentFacingMode = 'environment'; // Cámara trasera por defecto en móviles
+
+        async function startCamera() {
+            stopCamera();
+            const video = document.getElementById('cameraVideo');
+            const statusMsg = document.getElementById('cameraStatusMsg');
+            const statusTxt = document.getElementById('cameraStatusTxt');
+            const controls = document.getElementById('cameraControls');
+            if (!video) return;
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                if (statusMsg) {
+                    statusMsg.style.display = 'block';
+                    statusTxt.textContent = 'Tu navegador o entorno no soporta captura directa de cámara. Por favor utiliza la opción "Adjuntar archivo".';
+                }
+                if (controls) controls.style.display = 'none';
+                return;
+            }
+
+            if (statusMsg) {
+                statusMsg.style.display = 'block';
+                statusTxt.textContent = 'Solicitando permiso para usar la cámara...';
+            }
+            if (controls) controls.style.display = 'none';
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: { ideal: currentFacingMode },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                };
+                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = cameraStream;
+                await video.play();
+                if (statusMsg) statusMsg.style.display = 'none';
+                if (controls) controls.style.display = 'flex';
+            } catch (err) {
+                console.error('Camera error:', err);
+                if (statusMsg) {
+                    statusMsg.style.display = 'block';
+                    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                        statusTxt.textContent = 'Permiso denegado. Concede permiso de cámara en la configuración o barra de tu navegador para tomar fotos directamente.';
+                    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                        statusTxt.textContent = 'No se encontró cámara disponible en este dispositivo.';
+                    } else {
+                        statusTxt.textContent = 'No se pudo iniciar la cámara: ' + (err.message || 'Error desconocido.');
+                    }
+                }
+                if (controls) controls.style.display = 'none';
+            }
+        }
+
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+            const video = document.getElementById('cameraVideo');
+            if (video) video.srcObject = null;
+        }
+
+        // 3. Modal Agregar Foto
+        const modalAgregarFoto = document.getElementById('modalAgregarFoto');
+        if (modalAgregarFoto) {
+            const formFoto = document.getElementById('formFoto');
+            const tabArchivo = document.getElementById('tabFotoArchivo');
+            const tabCamara = document.getElementById('tabFotoCamara');
+            const panelArchivo = document.getElementById('panelFotoArchivo');
+            const panelCamara = document.getElementById('panelFotoCamara');
+            const panelPreview = document.getElementById('panelFotoPreview');
+            const dropzone = document.getElementById('dropzoneFoto');
+            const inpFile = document.getElementById('inpFotoFile');
+            const photoPreviewImg = document.getElementById('photoPreviewImg');
+            const previewInfo = document.getElementById('previewInfo');
+            const btnCambiarFoto = document.getElementById('btnCambiarFoto');
+            const btnShutter = document.getElementById('btnShutter');
+            const btnCamSwitch = document.getElementById('btnCamSwitch');
+            const btnRetryCam = document.getElementById('btnRetryCam');
+            const fotoBase64 = document.getElementById('fotoBase64Input');
+            const pdfTipoSel = document.getElementById('pdfTipoSelect');
+            const inpFotoDesc = document.getElementById('pdfDescripcion');
+            const countFotoDesc = document.getElementById('fotoDescCount');
+            const errBox = document.getElementById('modalFotoError');
+            const errText = document.getElementById('modalFotoErrorText');
+            const btnGuardar = document.getElementById('btnGuardarFoto');
+
+            let modoActivo = 'archivo'; // 'archivo' | 'camara'
+
+            // Contador de caracteres para pdfDescripcion
+            if (inpFotoDesc && countFotoDesc) {
+                const updFotoCount = () => { countFotoDesc.textContent = `${inpFotoDesc.value.length}/400`; };
+                inpFotoDesc.addEventListener('input', updFotoCount);
+                updFotoCount();
+            }
+
+            function switchModo(modo) {
+                modoActivo = modo;
+                errBox.classList.remove('show');
+                if (modo === 'archivo') {
+                    tabArchivo.classList.add('active');
+                    tabCamara.classList.remove('active');
+                    panelArchivo.style.display = fotoBase64.value ? 'none' : 'block';
+                    panelCamara.style.display = 'none';
+                    stopCamera();
+                } else {
+                    tabCamara.classList.add('active');
+                    tabArchivo.classList.remove('active');
+                    panelArchivo.style.display = 'none';
+                    panelCamara.style.display = fotoBase64.value ? 'none' : 'block';
+                    if (!fotoBase64.value) {
+                        startCamera();
+                    }
+                }
+            }
+
+            function setCapturedPhoto(dataUrl, info) {
+                fotoBase64.value = dataUrl;
+                photoPreviewImg.src = dataUrl;
+                previewInfo.textContent = info || 'Fotografía optimizada lista para guardar';
+                panelPreview.style.display = 'block';
+                panelArchivo.style.display = 'none';
+                panelCamara.style.display = 'none';
+                stopCamera();
+            }
+
+            function clearCapturedPhoto() {
+                fotoBase64.value = '';
+                photoPreviewImg.src = '';
+                panelPreview.style.display = 'none';
+                inpFile.value = '';
+                if (modoActivo === 'camara') {
+                    panelCamara.style.display = 'block';
+                    startCamera();
+                } else {
+                    panelArchivo.style.display = 'block';
+                }
+            }
+
+            tabArchivo.addEventListener('click', () => switchModo('archivo'));
+            tabCamara.addEventListener('click', () => switchModo('camara'));
+
+            if (btnCambiarFoto) btnCambiarFoto.addEventListener('click', clearCapturedPhoto);
+            if (btnRetryCam) btnRetryCam.addEventListener('click', () => startCamera());
+
+            if (btnCamSwitch) {
+                btnCamSwitch.addEventListener('click', () => {
+                    currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+                    startCamera();
+                });
+            }
+
+            // Capturar foto desde la cámara
+            if (btnShutter) {
+                btnShutter.addEventListener('click', async () => {
+                    const video = document.getElementById('cameraVideo');
+                    if (!video || !video.videoWidth) return;
+
+                    btnShutter.style.transform = 'scale(0.88)';
+                    setTimeout(() => { btnShutter.style.transform = ''; }, 150);
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const rawUrl = canvas.toDataURL('image/jpeg', 0.95);
+
+                    try {
+                        const comp = await compressImage(rawUrl, 1920, 1920, 0.85);
+                        setCapturedPhoto(comp.dataUrl, `Cámara: ${comp.width}x${comp.height} px (${comp.estKb} KB)`);
+                    } catch (e) {
+                        setCapturedPhoto(rawUrl, 'Foto capturada desde la cámara');
+                    }
+                });
+            }
+
+            // Procesar archivo seleccionado (Dropzone)
+            async function handleFile(file) {
+                if (!file || !file.type.startsWith('image/')) {
+                    errText.textContent = 'Por favor selecciona un archivo de imagen válido (JPG, PNG, WEBP).';
+                    errBox.classList.add('show');
+                    return;
+                }
+                errBox.classList.remove('show');
+                try {
+                    const comp = await compressImage(file, 1920, 1920, 0.85);
+                    setCapturedPhoto(comp.dataUrl, `Archivo: ${comp.width}x${comp.height} px (${comp.estKb} KB optimizada)`);
+                } catch (e) {
+                    errText.textContent = 'Error al procesar la fotografía: ' + e.message;
+                    errBox.classList.add('show');
+                }
+            }
+
+            if (dropzone && inpFile) {
+                dropzone.addEventListener('click', () => inpFile.click());
+                inpFile.addEventListener('change', () => {
+                    if (inpFile.files && inpFile.files[0]) {
+                        handleFile(inpFile.files[0]);
+                    }
+                });
+
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    dropzone.addEventListener(eventName, e => {
+                        e.preventDefault();
+                        dropzone.classList.add('dragover');
+                    });
+                });
+                ['dragleave', 'drop'].forEach(eventName => {
+                    dropzone.addEventListener(eventName, e => {
+                        e.preventDefault();
+                        dropzone.classList.remove('dragover');
+                    });
+                });
+                dropzone.addEventListener('drop', e => {
+                    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+                        handleFile(e.dataTransfer.files[0]);
+                    }
+                });
+            }
+
+            // Abrir modal agregar foto
+            document.querySelectorAll('.js-abrir-foto').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    formFoto.reset();
+                    fotoBase64.value = '';
+                    photoPreviewImg.src = '';
+                    panelPreview.style.display = 'none';
+                    if (inpFotoDesc) {
+                        inpFotoDesc.value = '';
+                        if (countFotoDesc) countFotoDesc.textContent = '0/400';
+                    }
+                    errBox.classList.remove('show');
+                    btnGuardar.classList.remove('loading');
+                    switchModo('archivo');
+                    openModal(modalAgregarFoto);
+                });
+            });
+
+            // Envío del formulario
+            formFoto.addEventListener('submit', e => {
+                errBox.classList.remove('show');
+                if (!fotoBase64.value) {
+                    e.preventDefault();
+                    errText.textContent = 'Debes adjuntar un archivo o tomar una fotografía antes de guardar.';
+                    errBox.classList.add('show');
+                    return;
+                }
+                if (!pdfTipoSel.value) {
+                    e.preventDefault();
+                    errText.textContent = 'Selecciona el tipo de fotografía (Antes de, Después de, Actual).';
+                    errBox.classList.add('show');
+                    pdfTipoSel.focus();
+                    return;
+                }
+                btnGuardar.classList.add('loading');
+            });
+        }
+
+        // 4. Modal Eliminar Fotografía
+        const modalEliminarFoto = document.getElementById('modalEliminarFoto');
+        if (modalEliminarFoto) {
+            const elimFotoId = document.getElementById('eliminarFotoId');
+            const elimFotoTxt = document.getElementById('eliminarFotoTexto');
+
+            document.querySelectorAll('.js-eliminar-foto').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    elimFotoId.value = btn.dataset.id;
+                    const descInfo = btn.dataset.desc ? `<br><span style="color:#d4d4d8; font-style:italic;">"${btn.dataset.desc}"</span>` : '';
+                    elimFotoTxt.innerHTML = `¿Deseas eliminar esta fotografía del tipo <strong>"${btn.dataset.tipo}"</strong>${descInfo} registrada el <strong>${btn.dataset.date}</strong>? Esta acción no se puede deshacer.`;
+                    openModal(modalEliminarFoto);
+                });
+            });
+        }
+
+        // 5. Filtros de Fotos (Todas, Antes de, Actual, Después de)
+        const filterPills = document.querySelectorAll('#fotoFilters .filter-pill');
+        const fotoCards = document.querySelectorAll('#fotosGrid .foto-card');
+        if (filterPills.length > 0 && fotoCards.length > 0) {
+            filterPills.forEach(pill => {
+                pill.addEventListener('click', () => {
+                    filterPills.forEach(p => p.classList.remove('active'));
+                    pill.classList.add('active');
+                    const fil = pill.dataset.filter;
+                    fotoCards.forEach(card => {
+                        if (fil === 'all' || card.dataset.tipo === fil) {
+                            card.style.display = 'flex';
+                        } else {
+                            card.style.display = 'none';
+                        }
+                    });
+                });
+            });
+        }
+
+        // 6. Lightbox / Pantalla Completa
+        const modalLightbox = document.getElementById('modalLightbox');
+        const lightboxImg = document.getElementById('lightboxImg');
+        const lightboxTitle = document.getElementById('lightboxTitle');
+        const lightboxDate = document.getElementById('lightboxDate');
+        const lightboxDesc = document.getElementById('lightboxDesc');
+        const lightboxDownload = document.getElementById('lightboxDownload');
+
+        function openLightbox(src, title, date, desc) {
+            if (!modalLightbox || !lightboxImg) return;
+            lightboxImg.src = src;
+            if (lightboxTitle) lightboxTitle.textContent = title || 'Fotografía de Partida';
+            if (lightboxDate) lightboxDate.textContent = date || '';
+            if (lightboxDesc) {
+                if (desc && desc.trim()) {
+                    lightboxDesc.textContent = desc.trim();
+                    lightboxDesc.style.display = 'block';
+                } else {
+                    lightboxDesc.textContent = '';
+                    lightboxDesc.style.display = 'none';
+                }
+            }
+            if (lightboxDownload) lightboxDownload.href = src;
+            modalLightbox.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            if (!modalLightbox) return;
+            modalLightbox.classList.remove('open');
+            document.body.style.overflow = '';
+            if (lightboxImg) lightboxImg.src = '';
+            if (lightboxDesc) {
+                lightboxDesc.textContent = '';
+                lightboxDesc.style.display = 'none';
+            }
+        }
+
+        document.querySelectorAll('.js-lightbox-trigger').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openLightbox(el.dataset.src, el.dataset.title, el.dataset.date, el.dataset.desc);
+            });
+        });
+
+        document.querySelectorAll('.js-lightbox-close').forEach(btn => {
+            btn.addEventListener('click', closeLightbox);
+        });
+
+        if (modalLightbox) {
+            modalLightbox.addEventListener('click', e => {
+                if (e.target === modalLightbox || e.target.id === 'lightboxContent') {
+                    closeLightbox();
+                }
+            });
+        }
+
         // Mostrar errores al recargar si hubo POST fallido
         <?php if ($formError): ?>
             <?php if ($formModal === 'partida' && $perm['modificar']): ?>
@@ -1456,6 +3057,14 @@ $sumaCantidad = array_sum(array_column($insumosAsignados, 'opiCantidad'));
                 document.getElementById('modalInsumoErrorText').textContent = <?= json_encode($formError) ?>;
                 document.getElementById('modalInsumoError').classList.add('show');
                 openModal(document.getElementById('modalAgregarInsumo'));
+            <?php elseif ($formModal === 'foto'): ?>
+                document.getElementById('modalFotoErrorText').textContent = <?= json_encode($formError) ?>;
+                document.getElementById('modalFotoError').classList.add('show');
+                openModal(document.getElementById('modalAgregarFoto'));
+            <?php elseif ($formModal === 'avance' && $perm['modificar']): ?>
+                document.getElementById('modalAvanceErrorText').textContent = <?= json_encode($formError) ?>;
+                document.getElementById('modalAvanceError').classList.add('show');
+                openModal(document.getElementById('modalAvance'));
             <?php endif; ?>
         <?php endif; ?>
     })();
