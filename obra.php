@@ -33,6 +33,46 @@ if (!$obra) {
 }
 
 // ---------------------------------------------------------------------------
+// Servir fotografía en streaming directamente desde la BD (evita memory leaks)
+// ---------------------------------------------------------------------------
+if (isset($_GET['ver_foto'])) {
+    $idFotoVer = (int)$_GET['ver_foto'];
+    $esMiniatura = isset($_GET['thumb']) && $_GET['thumb'] === '1';
+    if ($idFotoVer > 0) {
+        try {
+            if ($esMiniatura) {
+                $stF = $db->prepare(
+                    "SELECT COALESCE(f.pdfFotoMiniatura, f.pdfFoto) AS foto
+                       FROM obrapartidasfotos f
+                       JOIN obrapartidas p ON p.idPartidaObra = f.idPartidaObra
+                      WHERE f.idPartidaFoto = ? AND p.idObra = ?
+                      LIMIT 1"
+                );
+            } else {
+                $stF = $db->prepare(
+                    "SELECT f.pdfFoto AS foto
+                       FROM obrapartidasfotos f
+                       JOIN obrapartidas p ON p.idPartidaObra = f.idPartidaObra
+                      WHERE f.idPartidaFoto = ? AND p.idObra = ?
+                      LIMIT 1"
+                );
+            }
+            $stF->execute([$idFotoVer, $idObra]);
+            $blob = $stF->fetchColumn();
+            if ($blob) {
+                header('Content-Type: image/jpeg');
+                header('Cache-Control: public, max-age=604800, immutable');
+                header('Content-Length: ' . strlen($blob));
+                echo $blob;
+                exit;
+            }
+        } catch (Exception $e) {}
+    }
+    http_response_code(404);
+    exit;
+}
+
+// ---------------------------------------------------------------------------
 // Permisos del módulo PARTIDAS (PAS8)
 // ---------------------------------------------------------------------------
 $perm = ['consultar' => false, 'agregar' => false, 'modificar' => false, 'eliminar' => false];
@@ -69,10 +109,14 @@ function valid_date(?string $d): bool {
 function fmt_date(?string $d): string {
     return $d ? date('d/m/Y', strtotime($d)) : 'S/F';
 }
+function fmt_date_time(?string $d): string {
+    return $d ? date('d/m/Y H:i', strtotime($d)) . ' hrs' : 'S/F';
+}
 
-$obraInicio = !empty($obra['obrFechaInicio']) ? $obra['obrFechaInicio'] : null;
-$formError  = null;
-$formOld    = null; // datos a re-mostrar en el modal tras error
+$obraInicio    = !empty($obra['obrFechaInicio']) ? $obra['obrFechaInicio'] : null;
+$formError     = null;
+$formOld       = null; // datos a re-mostrar en el modal tras error
+$seccionActiva = (($_GET['seccion'] ?? $_POST['seccion'] ?? 'partidas') === 'fotos') ? 'fotos' : 'partidas';
 
 // ---------------------------------------------------------------------------
 // Acciones POST
@@ -158,6 +202,25 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         }
         header('Location: obra.php?id=' . $idObra);
         exit;
+    } elseif ($action === 'eliminar_foto') {
+        if (!$perm['eliminar']) {
+            $_SESSION['flash_error'] = 'No tienes permiso para eliminar fotografías.';
+        } else {
+            $idPartidaFoto = (int)($_POST['idPartidaFoto'] ?? 0);
+            try {
+                $stDelFoto = $db->prepare(
+                    "DELETE f FROM obrapartidasfotos f
+                       JOIN obrapartidas p ON p.idPartidaObra = f.idPartidaObra
+                      WHERE f.idPartidaFoto = ? AND p.idObra = ?"
+                );
+                $stDelFoto->execute([$idPartidaFoto, $idObra]);
+                $_SESSION['flash_success'] = 'Fotografía eliminada correctamente.';
+            } catch (Exception $e) {
+                $_SESSION['flash_error'] = 'Error al eliminar la fotografía: ' . $e->getMessage();
+            }
+        }
+        header('Location: obra.php?id=' . $idObra . '&seccion=fotos');
+        exit;
     }
 }
 
@@ -175,6 +238,41 @@ if ($puedeVer) {
     $stPart->execute([$idObra]);
     $partidas = $stPart->fetchAll(PDO::FETCH_ASSOC);
 }
+
+// ---------------------------------------------------------------------------
+// Todas las fotografías de la obra (juntando todas las partidas) y tipos
+// ---------------------------------------------------------------------------
+$fotosObra = [];
+$catalogoTiposFotos = [];
+if ($puedeVer) {
+    try {
+        $stFotosObra = $db->prepare(
+            "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin, f.pdfFechaFoto,
+                    t.pdftDescripcion,
+                    p.pdoClave, p.pdoDescripcion,
+                    LENGTH(f.pdfFoto) AS fotoSize,
+                    LENGTH(COALESCE(f.pdfFotoMiniatura, f.pdfFoto)) AS thumbSize
+               FROM obrapartidasfotos f
+               JOIN obrapartidas p ON p.idPartidaObra = f.idPartidaObra
+          LEFT JOIN obrapartidasfotostipo t ON t.pdfTipo = f.pdfTipo
+              WHERE p.idObra = ?
+              ORDER BY COALESCE(f.pdfFechaFoto, f.pdfFecha) DESC, f.idPartidaFoto DESC"
+        );
+        $stFotosObra->execute([$idObra]);
+        $fotosObra = $stFotosObra->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $fotosObra = [];
+    }
+
+    try {
+        $catalogoTiposFotos = $db->query(
+            "SELECT pdfTipo, pdftDescripcion FROM obrapartidasfotostipo ORDER BY pdfTipo ASC"
+        )->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $catalogoTiposFotos = [];
+    }
+}
+$totalFotosObra = count($fotosObra);
 
 // Flash
 $flashSuccess = $_SESSION['flash_success'] ?? null;
@@ -251,6 +349,7 @@ $csrf = csrf_token();
         }
         .obra-hero-img { width: 100%; height: 190px; border-radius: 12px; overflow: hidden; background: #18181b; display: grid; place-items: center; color: var(--subtle); border: 1px solid var(--border); }
         .obra-hero-img img { width: 100%; height: 100%; object-fit: cover; }
+        .obra-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
         .obra-hero h1 { font-size: clamp(1.5rem, 2.6vw, 2.1rem); line-height: 1.2; margin: .55rem 0 .5rem; }
         .tag-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
         .tag { font-size: .72rem; font-weight: 700; color: var(--muted); background: rgba(255,255,255,.05); padding: .25rem .6rem; border-radius: 6px; border: 1px solid var(--border); letter-spacing: .03em; }
@@ -260,6 +359,225 @@ $csrf = csrf_token();
         .hero-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .75rem; margin-top: 1.25rem; padding-top: 1.1rem; border-top: 1px solid var(--border); }
         .hero-stats .lbl { display: block; font-size: .68rem; text-transform: uppercase; color: var(--subtle); letter-spacing: .05em; margin-bottom: .2rem; }
         .hero-stats .val { font-weight: 700; color: #fff; font-size: 1rem; }
+
+        /* ---------- Botón Blanco FOTOS DE LA OBRA ---------- */
+        .btn-hero-white {
+            display: inline-flex; align-items: center; gap: .55rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .03em;
+            padding: .62rem 1.25rem; border-radius: 11px;
+            background: #ffffff; color: #09090b; border: 1px solid #ffffff;
+            cursor: pointer; text-decoration: none;
+            box-shadow: 0 4px 18px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .4);
+            transition: all .22s var(--ease);
+        }
+        .btn-hero-white:hover {
+            background: #f4f4f5; color: #000;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(255, 255, 255, .35), 0 3px 8px rgba(0, 0, 0, .5);
+        }
+        .btn-hero-white svg { color: #09090b; transition: transform .2s var(--ease); }
+        .btn-hero-white:hover svg { transform: scale(1.1); }
+
+        /* ---------- Sección Fotografías de la Obra y Botón FILTRO ---------- */
+        .photos-top-bar {
+            display: flex; align-items: center; justify-content: space-between; gap: .85rem; margin-bottom: 2rem; flex-wrap: wrap;
+        }
+        .filtro-dropdown-wrap {
+            position: relative; display: inline-block;
+        }
+        .btn-filtro-fotos {
+            display: inline-flex; align-items: center; gap: .55rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .03em;
+            padding: .62rem 1.15rem; border-radius: 11px;
+            background: rgba(255, 255, 255, .08); color: #fff; border: 1px solid var(--border-strong);
+            cursor: pointer; transition: all .2s var(--ease);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+        }
+        .btn-filtro-fotos:hover,
+        .btn-filtro-fotos[aria-expanded="true"] {
+            background: rgba(255, 255, 255, .15); border-color: rgba(255, 255, 255, .45);
+            transform: translateY(-1px);
+        }
+        .filtro-active-tag {
+            font-size: .72rem; font-weight: 700; padding: .15rem .55rem;
+            border-radius: 999px; background: #fff; color: #09090b;
+            letter-spacing: .02em;
+        }
+        .filtro-chevron {
+            color: var(--muted); transition: transform .2s var(--ease);
+        }
+        .btn-filtro-fotos[aria-expanded="true"] .filtro-chevron {
+            transform: rotate(180deg); color: #fff;
+        }
+        .filtro-dropdown-menu {
+            position: absolute; right: 0; top: calc(100% + 8px); z-index: 60;
+            min-width: 240px; background: #141418; border: 1px solid var(--border-strong);
+            border-radius: 14px; padding: .45rem;
+            box-shadow: 0 22px 48px -10px rgba(0, 0, 0, .92);
+            opacity: 0; transform: translateY(-8px); pointer-events: none;
+            transition: opacity .18s var(--ease), transform .18s var(--ease);
+        }
+        .filtro-dropdown-menu.open {
+            opacity: 1; transform: none; pointer-events: auto;
+        }
+        .filtro-menu-header {
+            font-size: .68rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .06em; color: var(--subtle);
+            padding: .45rem .75rem .35rem; border-bottom: 1px solid var(--border);
+            margin-bottom: .3rem;
+        }
+        .filtro-menu-item {
+            width: 100%; display: flex; align-items: center; gap: .65rem;
+            padding: .6rem .75rem; font: inherit; font-size: .85rem; font-weight: 600;
+            color: #d4d4d8; background: transparent; border: none; border-radius: 9px;
+            cursor: pointer; text-align: left; transition: all .15s var(--ease);
+        }
+        .filtro-menu-item:hover {
+            background: rgba(255, 255, 255, .08); color: #fff;
+        }
+        .filtro-menu-item.active {
+            background: rgba(255, 255, 255, .14); color: #fff; font-weight: 700;
+        }
+        .filtro-item-dot {
+            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+            background: #fff;
+        }
+        .filtro-item-dot.dot-all { background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.6); }
+        .filtro-item-dot.dot-tipo-1 { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,.6); }
+        .filtro-item-dot.dot-tipo-2 { background: #34d399; box-shadow: 0 0 6px rgba(52,211,153,.6); }
+        .filtro-item-dot.dot-tipo-3 { background: #c084fc; box-shadow: 0 0 6px rgba(192,132,252,.6); }
+        .filtro-item-lbl { flex: 1; }
+        .filtro-item-count {
+            font-size: .72rem; font-weight: 700; padding: .1rem .48rem;
+            border-radius: 999px; background: rgba(255, 255, 255, .1); color: var(--muted);
+        }
+        .filtro-menu-item.active .filtro-item-count {
+            background: #fff; color: #000;
+        }
+
+        .filter-pills { display: flex; gap: .45rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
+        .filter-pill {
+            padding: .4rem .9rem; font-size: .8rem; font-weight: 600;
+            border-radius: 999px; border: 1px solid var(--border);
+            background: rgba(255,255,255,.04); color: var(--muted);
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .filter-pill:hover { color: #fff; background: rgba(255,255,255,.08); }
+        .filter-pill.active {
+            background: #fff; color: #000; font-weight: 700;
+            border-color: #fff; box-shadow: 0 4px 12px rgba(255,255,255,.2);
+        }
+
+        .fotos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 1.35rem; animation: rise .45s var(--ease) both;
+        }
+        .foto-card {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            overflow: hidden; display: flex; flex-direction: column;
+            backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            transition: all .25s var(--ease); box-shadow: 0 12px 30px -10px rgba(0,0,0,.5);
+        }
+        .foto-card:hover {
+            transform: translateY(-4px); border-color: var(--border-strong);
+            box-shadow: 0 20px 40px -10px rgba(0,0,0,.75);
+        }
+        .foto-thumb-wrap {
+            position: relative; width: 100%; aspect-ratio: 4 / 3;
+            background: #09090b; overflow: hidden; cursor: pointer;
+        }
+        .foto-thumb-img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform .35s var(--ease); display: block;
+        }
+        .foto-card:hover .foto-thumb-img { transform: scale(1.05); }
+        .foto-thumb-overlay {
+            position: absolute; inset: 0; background: rgba(0,0,0,.45);
+            opacity: 0; display: grid; place-items: center; color: #fff;
+            transition: opacity .2s var(--ease); backdrop-filter: blur(2px);
+        }
+        .foto-card:hover .foto-thumb-overlay { opacity: 1; }
+        .btn-zoom-circle {
+            width: 44px; height: 44px; border-radius: 50%;
+            background: rgba(255,255,255,.9); color: #000;
+            display: grid; place-items: center;
+            box-shadow: 0 8px 20px rgba(0,0,0,.5);
+            transform: scale(.85); transition: transform .2s var(--ease);
+        }
+        .foto-card:hover .btn-zoom-circle { transform: scale(1); }
+        .foto-body {
+            padding: 1rem 1.15rem; display: flex; flex-direction: column;
+            gap: .75rem; flex: 1;
+        }
+        .foto-body-top { display: flex; justify-content: space-between; align-items: center; gap: .6rem; }
+        .badge-tipo {
+            display: inline-flex; align-items: center; gap: .35rem;
+            font-size: .72rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .05em; padding: .3rem .65rem; border-radius: 8px; border: 1px solid transparent;
+        }
+        .badge-tipo-1 { background: rgba(59, 130, 246, .15); color: #93c5fd; border-color: rgba(59, 130, 246, .35); }
+        .badge-tipo-2 { background: rgba(16, 185, 129, .15); color: #6ee7b7; border-color: rgba(16, 185, 129, .35); }
+        .badge-tipo-3 { background: rgba(168, 85, 247, .15); color: #d8b4fe; border-color: rgba(168, 85, 247, .35); }
+        .foto-partida-tag {
+            display: inline-flex; align-items: center; gap: .4rem;
+            font-size: .76rem; color: #d4d4d8;
+            background: rgba(255,255,255,.04); border: 1px solid var(--border);
+            padding: .32rem .65rem; border-radius: 8px;
+            text-decoration: none; transition: all .2s var(--ease);
+            max-width: 100%; overflow: hidden;
+        }
+        .foto-partida-tag:hover {
+            background: rgba(255,255,255,.1); color: #fff; border-color: var(--border-strong);
+        }
+        .foto-partida-tag strong {
+            font-family: 'Outfit', sans-serif; color: #fff; font-weight: 700; letter-spacing: .03em; flex-shrink: 0;
+        }
+        .foto-partida-tag span {
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted);
+        }
+        .foto-date { display: flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); }
+        .foto-footer {
+            display: flex; justify-content: space-between; align-items: center;
+            border-top: 1px solid var(--border); padding-top: .75rem; margin-top: auto;
+        }
+        .btn-act {
+            display: inline-flex; align-items: center; gap: .45rem;
+            font: inherit; font-size: .84rem; font-weight: 600; padding: .65rem 1.1rem; border-radius: 10px;
+            background: rgba(255,255,255,.06); border: 1px solid var(--border); color: #e4e4e7;
+            cursor: pointer; transition: all .2s var(--ease); text-decoration: none;
+        }
+        .btn-act:hover { background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.3); }
+        .btn-tbl {
+            background: rgba(255,255,255,.05); border: 1px solid var(--border); color: var(--muted);
+            border-radius: 8px; width: 32px; height: 32px; display: grid; place-items: center;
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .btn-tbl:hover { background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.3); }
+        .btn-tbl.danger:hover { background: rgba(239,68,68,.18); color: #fca5a5; border-color: rgba(239,68,68,.4); }
+        .empty-icon-camera {
+            background: linear-gradient(135deg, rgba(0,112,243,.25), rgba(121,40,202,.25), rgba(255,0,127,.25)) !important;
+            box-shadow: 0 0 40px rgba(0,112,243,.3) !important;
+        }
+        .lightbox-modal {
+            position: fixed; inset: 0; z-index: 120;
+            background: rgba(0,0,0,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            display: flex; flex-direction: column;
+            opacity: 0; visibility: hidden; transition: opacity .25s var(--ease), visibility .25s;
+        }
+        .lightbox-modal.open { opacity: 1; visibility: visible; }
+        .lightbox-topbar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1rem 1.75rem; border-bottom: 1px solid var(--border);
+            background: rgba(18,18,22,.6);
+        }
+        .lightbox-content {
+            flex: 1; display: grid; place-items: center; padding: 1.5rem; overflow: hidden;
+        }
+        .lightbox-img {
+            max-width: 90vw; max-height: 82vh; object-fit: contain; border-radius: 12px;
+            box-shadow: 0 25px 60px rgba(0,0,0,.95);
+        }
 
         /* ---------- Sección de partidas ---------- */
         .section-header-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
@@ -423,6 +741,7 @@ $csrf = csrf_token();
             .app { padding: 1.25rem 1rem 3.5rem; }
             .hero-stats { grid-template-columns: repeat(2, 1fr); }
             .partidas-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+            .fotos-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
         }
 
         @media (max-width: 760px) {
@@ -433,6 +752,10 @@ $csrf = csrf_token();
             .section-header-row { flex-direction: column; align-items: stretch; gap: .85rem; }
             .section-header-row > * { width: 100%; }
             .partidas-grid { grid-template-columns: 1fr; }
+            .fotos-grid { grid-template-columns: 1fr; }
+            .filtro-dropdown-wrap { width: 100%; }
+            .btn-filtro-fotos { width: 100%; justify-content: center; }
+            .filtro-dropdown-menu { left: 0; right: 0; width: 100%; }
         }
 
         @media (max-width: 640px) {
@@ -443,6 +766,12 @@ $csrf = csrf_token();
             .hero-stats { grid-template-columns: repeat(2, 1fr); gap: .55rem; padding-top: 1rem; }
             .hero-stats .stat-item { padding: .65rem .75rem; }
             .hero-stats .val { font-size: .95rem; }
+            .obra-hero-top { flex-direction: column; align-items: stretch; gap: .75rem; }
+            .obra-hero-top .btn-hero-white { width: 100%; justify-content: center; }
+            .photos-top-bar .btn-hero-white { width: 100%; justify-content: center; }
+            .lightbox-topbar { padding: .75rem 1rem; }
+            .lightbox-content { padding: .75rem; }
+            .lightbox-img { max-width: 96vw; max-height: 78vh; }
 
             /* Modales en teléfonos móviles */
             .modal-backdrop {
@@ -522,8 +851,13 @@ $csrf = csrf_token();
         </header>
 
         <main class="content">
-            <a href="index.php#obras-activas" class="back-link">&larr; Volver a Obras Activas</a>
+            <?php if ($seccionActiva === 'fotos'): ?>
+                <a href="obra.php?id=<?= $idObra ?>" class="back-link">&larr; Volver a <?= htmlspecialchars($obra['obrNombreObra'] ?: 'la Obra') ?></a>
+            <?php else: ?>
+                <a href="index.php#obras-activas" class="back-link">&larr; Volver a Obras Activas</a>
+            <?php endif; ?>
 
+            <?php if ($seccionActiva !== 'fotos'): ?>
             <!-- Encabezado de la obra -->
             <section class="obra-hero" aria-label="Datos de la obra">
                 <div class="obra-hero-img">
@@ -534,9 +868,20 @@ $csrf = csrf_token();
                     <?php endif; ?>
                 </div>
                 <div>
-                    <div class="tag-row">
-                        <span class="tag"><?= htmlspecialchars($obra['obrContrato'] ?: 'S/N CONTRATO') ?></span>
-                        <span class="pill"><?= htmlspecialchars($statusLabel) ?></span>
+                    <div class="obra-hero-top">
+                        <div class="tag-row">
+                            <span class="tag"><?= htmlspecialchars($obra['obrContrato'] ?: 'S/N CONTRATO') ?></span>
+                            <span class="pill"><?= htmlspecialchars($statusLabel) ?></span>
+                        </div>
+                        <?php if ($puedeVer): ?>
+                            <a href="obra.php?id=<?= $idObra ?>&seccion=fotos" class="btn-hero-white" id="btnFotosDeLaObra" title="Ver todas las fotografías de la obra">
+                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                    <circle cx="12" cy="13" r="4"/>
+                                </svg>
+                                <span>FOTOS DE LA OBRA</span>
+                            </a>
+                        <?php endif; ?>
                     </div>
                     <h1><?= htmlspecialchars($obra['obrNombreObra'] ?: 'Obra sin nombre') ?></h1>
                     <?php if (!empty($obra['obrUbicacion'])): ?>
@@ -547,9 +892,11 @@ $csrf = csrf_token();
                     <?php endif; ?>
                     <div class="hero-stats">
                         <div><span class="lbl">Partidas</span><span class="val"><?= count($partidas) ?></span></div>
+                        <div><span class="lbl">Fotos de la Obra</span><span class="val"><?= $totalFotosObra ?></span></div>
                     </div>
                 </div>
             </section>
+            <?php endif; ?>
 
             <?php if ($flashSuccess): ?>
                 <div class="alert alert-info" role="status" style="margin-bottom: 1.5rem; background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.3); color: #fff;">
@@ -564,6 +911,7 @@ $csrf = csrf_token();
                 </div>
             <?php endif; ?>
 
+            <?php if ($seccionActiva !== 'fotos'): ?>
             <!-- Partidas -->
             <section id="partidas" aria-labelledby="partidasTitle">
                 <?php if (!$puedeVer): ?>
@@ -686,6 +1034,199 @@ $csrf = csrf_token();
                     <?php endif; ?>
                 <?php endif; ?>
             </section>
+            <?php else: ?>
+            <!-- ========================================================================= -->
+            <!-- SECCIÓN: FOTOS DE LA OBRA (TODAS LAS PARTIDAS CONSOLIDADAS)               -->
+            <!-- ========================================================================= -->
+            <div class="photos-top-bar" aria-label="Navegación de Fotografías de la Obra">
+                <a href="obra.php?id=<?= $idObra ?>" class="btn-hero-white" id="btnVolverPartidas" title="Volver a las partidas de la obra">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                    <span>PARTIDAS DE LA OBRA</span>
+                </a>
+            </div>
+
+            <section aria-labelledby="secFotosObraTitle" id="secFotosObra">
+                <?php
+                    $conteoPorTipo = [];
+                    foreach ($fotosObra as $fo) {
+                        $t = (int)($fo['pdfTipo'] ?? 0);
+                        $conteoPorTipo[$t] = ($conteoPorTipo[$t] ?? 0) + 1;
+                    }
+                ?>
+                <div class="section-header-row">
+                    <div>
+                        <div style="display: flex; align-items: center; gap: .65rem; flex-wrap: wrap;">
+                            <h2 id="secFotosObraTitle" style="font-size: 1.4rem; font-weight: 700; color: #fff; margin: 0;">Fotografías de la Obra</h2>
+                            <span class="badge" style="position: static; font-size: .72rem; padding: .2rem .6rem;"><?= $totalFotosObra ?></span>
+                        </div>
+                        <p style="color: var(--muted); font-size: .88rem; margin-top: .35rem;">
+                            Evidencia visual completa de <strong><?= htmlspecialchars($obra['obrNombreObra']) ?></strong> reuniendo todas sus partidas.
+                        </p>
+                    </div>
+
+                    <?php if (!empty($fotosObra)): ?>
+                        <div class="filtro-dropdown-wrap" id="filtroDropdownWrap">
+                            <button type="button" class="btn-filtro-fotos" id="btnFiltroFotos" aria-haspopup="true" aria-expanded="false" title="Filtrar por tipo de fotografía">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                                </svg>
+                                <span>FILTRO</span>
+                                <span class="filtro-active-tag" id="filtroActiveTag">Todas (<?= $totalFotosObra ?>)</span>
+                                <svg class="filtro-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"/>
+                                </svg>
+                            </button>
+
+                            <div class="filtro-dropdown-menu" id="filtroDropdownMenu" role="menu" aria-label="Filtrar por tipo de fotografía">
+                                <div class="filtro-menu-header">Filtrar por tipo de fotografía</div>
+                                <button type="button" class="filtro-menu-item active" data-filter="all" data-label="Todas (<?= $totalFotosObra ?>)" role="menuitem">
+                                    <span class="filtro-item-dot dot-all"></span>
+                                    <span class="filtro-item-lbl">Todas las fotografías</span>
+                                    <span class="filtro-item-count"><?= $totalFotosObra ?></span>
+                                </button>
+                                <?php foreach ($catalogoTiposFotos as $ctf):
+                                    $tipoId = (int)$ctf['pdfTipo'];
+                                    $cnt = $conteoPorTipo[$tipoId] ?? 0;
+                                ?>
+                                    <button type="button" class="filtro-menu-item" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)" role="menuitem">
+                                        <span class="filtro-item-dot dot-tipo-<?= $tipoId ?>"></span>
+                                        <span class="filtro-item-lbl"><?= htmlspecialchars($ctf['pdftDescripcion']) ?></span>
+                                        <span class="filtro-item-count"><?= $cnt ?></span>
+                                    </button>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <?php if (empty($fotosObra)): ?>
+                    <div class="empty-partidas">
+                        <div class="empty-icon empty-icon-camera">
+                            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        </div>
+                        <h3>Esta obra aún no tiene fotografías registradas.</h3>
+                        <p>Ingresa a cualquiera de las partidas de la obra para capturar o adjuntar fotografías (Antes de, Actual y Después de).</p>
+                        <a href="obra.php?id=<?= $idObra ?>" class="btn btn-primary" style="width: auto; padding: .8rem 1.7rem; font-size: .92rem; display: inline-flex;">
+                            <span>&larr; Ir a las partidas de la obra</span>
+                        </a>
+                    </div>
+                <?php else: ?>
+                    <!-- Píldoras rápidas sincronizadas con el botón FILTRO -->
+                    <div class="filter-pills" id="fotoFilters" role="tablist">
+                        <button type="button" class="filter-pill active" data-filter="all" data-label="Todas (<?= $totalFotosObra ?>)">Todas (<?= $totalFotosObra ?>)</button>
+                        <?php foreach ($catalogoTiposFotos as $ctf):
+                            $tipoId = (int)$ctf['pdfTipo'];
+                            $cnt = $conteoPorTipo[$tipoId] ?? 0;
+                        ?>
+                            <button type="button" class="filter-pill" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)">
+                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)
+                            </button>
+                        <?php endforeach; ?>
+                    </div>
+
+                    <div class="fotos-grid" id="fotosGrid">
+                        <?php foreach ($fotosObra as $foto):
+                            $tipoId = (int)($foto['pdfTipo'] ?? 0);
+                            $tipoDesc = $foto['pdftDescripcion'] ?: 'Fotografía';
+                            $idFoto = (int)$foto['idPartidaFoto'];
+                            $idPartFoto = (int)$foto['idPartidaObra'];
+                            $imgThumbSrc = "obra.php?id={$idObra}&ver_foto={$idFoto}&thumb=1";
+                            $imgFullSrc  = "obra.php?id={$idObra}&ver_foto={$idFoto}";
+                            $tipoBadgeCls = 'badge-tipo-' . $tipoId;
+                            $pesoFullKb = !empty($foto['fotoSize']) ? round((int)$foto['fotoSize'] / 1024) : 0;
+                            $pesoThumbKb = !empty($foto['thumbSize']) ? round((int)$foto['thumbSize'] / 1024) : 0;
+                            $fotoDesc = trim((string)($foto['pdfDescripcion'] ?? ''));
+                            $fechaFotoDisplay = !empty($foto['pdfFechaFoto']) ? fmt_date($foto['pdfFechaFoto']) : fmt_date_time($foto['pdfFecha']);
+                            $partidaClave = $foto['pdoClave'] ?: 'S/C';
+                            $partidaDesc  = $foto['pdoDescripcion'] ?: '';
+                            $lightboxTitleTxt = $tipoDesc . ' · Partida ' . $partidaClave;
+                        ?>
+                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-full-src="<?= $imgFullSrc ?>">
+                                <div class="foto-thumb-wrap js-lightbox-trigger"
+                                     data-src="<?= $imgFullSrc ?>"
+                                     data-title="<?= htmlspecialchars($lightboxTitleTxt) ?>"
+                                     data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
+                                     data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                     title="Doble clic o clic en Ampliar para ver en alta resolución">
+                                    <img src="<?= $imgThumbSrc ?>" alt="<?= htmlspecialchars($fotoDesc ?: $tipoDesc) ?>" class="foto-thumb-img" loading="lazy">
+                                    <div class="foto-thumb-overlay">
+                                        <div class="btn-zoom-circle" title="Ampliar fotografía">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="foto-body">
+                                    <div class="foto-body-top">
+                                        <span class="badge-tipo <?= $tipoBadgeCls ?>">
+                                            <?= htmlspecialchars($tipoDesc) ?>
+                                        </span>
+                                        <div style="display: flex; gap: .4rem; align-items: center;">
+                                            <?php if ($pesoThumbKb > 0): ?>
+                                                <span style="font-size: .72rem; color: #2ae083; font-weight: 700; background: rgba(42,224,131,.1); border: 1px solid rgba(42,224,131,.25); border-radius: 6px; padding: .15rem .45rem;" title="Tamaño miniatura en listado">
+                                                    <?= $pesoThumbKb ?> KB
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($pesoFullKb > 0): ?>
+                                                <span style="font-size: .72rem; color: var(--subtle); font-weight: 600;" title="Tamaño fotografía original">
+                                                    HD <?= $pesoFullKb ?> KB
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+
+                                    <a href="partida.php?id=<?= $idPartFoto ?>&seccion=fotos" class="foto-partida-tag" title="Ver fotos de la partida <?= htmlspecialchars($partidaClave) ?>">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                                        <strong><?= htmlspecialchars($partidaClave) ?></strong>
+                                        <?php if ($partidaDesc !== ''): ?>
+                                            <span>&bull; <?= htmlspecialchars($partidaDesc) ?></span>
+                                        <?php endif; ?>
+                                    </a>
+
+                                    <?php if ($fotoDesc !== ''): ?>
+                                        <div class="foto-desc" style="font-size: .88rem; color: #f4f4f5; line-height: 1.45; font-weight: 500; word-break: break-word; margin: .1rem 0 .2rem;">
+                                            <?= nl2br(htmlspecialchars($fotoDesc)) ?>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <div class="foto-date">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                        <span><?= htmlspecialchars($fechaFotoDisplay) ?></span>
+                                    </div>
+
+                                    <div class="foto-footer">
+                                        <button type="button" class="btn-act js-lightbox-trigger"
+                                                data-src="<?= $imgFullSrc ?>"
+                                                data-title="<?= htmlspecialchars($lightboxTitleTxt) ?>"
+                                                data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
+                                                data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                                style="padding: .45rem .85rem; font-size: .78rem;"
+                                                title="Ver fotografía original en alta resolución">
+                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                                            <span>Ampliar HD</span>
+                                        </button>
+                                        <?php if ($perm['eliminar']): ?>
+                                            <button type="button" class="btn-tbl danger js-eliminar-foto"
+                                                    data-id="<?= $idFoto ?>"
+                                                    data-tipo="<?= htmlspecialchars($tipoDesc) ?>"
+                                                    data-partida="<?= htmlspecialchars($partidaClave) ?>"
+                                                    data-date="<?= htmlspecialchars($fechaFotoDisplay) ?>"
+                                                    data-desc="<?= htmlspecialchars($fotoDesc) ?>"
+                                                    title="Eliminar fotografía">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                            </button>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <p class="no-results" id="noResultsFotos">No se encontraron fotografías del tipo seleccionado en esta obra.</p>
+                <?php endif; ?>
+            </section>
+            <?php endif; ?>
         </main>
     </div>
 
@@ -782,7 +1323,51 @@ $csrf = csrf_token();
             </form>
         </div>
     </div>
+
+    <!-- Modal eliminar fotografía desde Fotos de la Obra -->
+    <div class="modal-backdrop" id="modalEliminarFoto" role="alertdialog" aria-modal="true" aria-labelledby="modalEliminarFotoTitle">
+        <div class="modal modal-sm">
+            <div class="danger-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <h2 id="modalEliminarFotoTitle" style="font-size: 1.2rem; color: #fff; margin-bottom: .5rem;">¿Eliminar esta fotografía?</h2>
+            <p style="color: var(--muted); font-size: .88rem; line-height: 1.55;" id="eliminarFotoTexto"></p>
+            <form method="POST" action="obra.php?id=<?= $idObra ?>&seccion=fotos">
+                <input type="hidden" name="action" value="eliminar_foto">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf) ?>">
+                <input type="hidden" name="idObra" value="<?= $idObra ?>">
+                <input type="hidden" name="idPartidaFoto" id="eliminarFotoId" value="0">
+                <div class="modal-actions" style="justify-content: center;">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .8rem 1.3rem;">Cancelar</button>
+                    <button type="submit" class="btn btn-primary btn-danger" style="width: auto; padding: .8rem 1.6rem;">Sí, eliminar</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <?php endif; ?>
+
+    <!-- Lightbox de fotografía a pantalla completa -->
+    <div class="lightbox-modal" id="modalLightbox" role="dialog" aria-modal="true" aria-label="Visualizador de Fotografía">
+        <div class="lightbox-topbar">
+            <div>
+                <strong id="lightboxTitle" style="color: #fff; font-size: 1.05rem; display: block;">Fotografía</strong>
+                <span id="lightboxDate" style="color: var(--muted); font-size: .82rem;"></span>
+                <p id="lightboxDesc" style="color: #f4f4f5; font-size: .88rem; margin: .35rem 0 0; display: none;"></p>
+            </div>
+            <div style="display: flex; gap: .75rem; align-items: center;">
+                <a href="#" id="lightboxDownload" download="fotografia-obra.jpg" class="btn-act" style="padding: .5rem 1rem; font-size: .82rem;" title="Descargar imagen">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Descargar</span>
+                </a>
+                <button type="button" class="modal-close js-lightbox-close" aria-label="Cerrar visualizador">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="lightbox-content" id="lightboxContent">
+            <img src="" id="lightboxImg" class="lightbox-img" alt="Fotografía en alta resolución">
+        </div>
+    </div>
 
     <script>
     (() => {
@@ -1038,6 +1623,156 @@ $csrf = csrf_token();
                 none.style.display = visibles ? 'none' : 'block';
             });
         }
+
+        // ---------------- Sección FOTOS DE LA OBRA: Botón FILTRO, Píldoras y Lightbox ----------------
+        const btnFiltroFotos = document.getElementById('btnFiltroFotos');
+        const filtroDropdownMenu = document.getElementById('filtroDropdownMenu');
+        const filtroActiveTag = document.getElementById('filtroActiveTag');
+        const menuItems = document.querySelectorAll('#filtroDropdownMenu .filtro-menu-item');
+        const filterPills = document.querySelectorAll('#fotoFilters .filter-pill');
+        const fotoCards = document.querySelectorAll('#fotosGrid .foto-card');
+        const noResultsFotos = document.getElementById('noResultsFotos');
+
+        function applyPhotoFilter(filterVal, labelTxt) {
+            menuItems.forEach(item => {
+                item.classList.toggle('active', item.dataset.filter === filterVal);
+            });
+            filterPills.forEach(pill => {
+                pill.classList.toggle('active', pill.dataset.filter === filterVal);
+            });
+            if (filtroActiveTag && labelTxt) {
+                filtroActiveTag.textContent = labelTxt;
+            }
+            let visibles = 0;
+            fotoCards.forEach(card => {
+                const show = (filterVal === 'all' || card.dataset.tipo === filterVal);
+                card.style.display = show ? 'flex' : 'none';
+                if (show) visibles++;
+            });
+            if (noResultsFotos) {
+                noResultsFotos.style.display = visibles > 0 ? 'none' : 'block';
+            }
+        }
+
+        if (btnFiltroFotos && filtroDropdownMenu) {
+            btnFiltroFotos.addEventListener('click', e => {
+                e.stopPropagation();
+                const isOpen = filtroDropdownMenu.classList.toggle('open');
+                btnFiltroFotos.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            });
+
+            document.addEventListener('click', e => {
+                if (!filtroDropdownMenu.contains(e.target) && e.target !== btnFiltroFotos) {
+                    filtroDropdownMenu.classList.remove('open');
+                    btnFiltroFotos.setAttribute('aria-expanded', 'false');
+                }
+            });
+
+            menuItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    applyPhotoFilter(item.dataset.filter, item.dataset.label);
+                    filtroDropdownMenu.classList.remove('open');
+                    btnFiltroFotos.setAttribute('aria-expanded', 'false');
+                });
+            });
+        }
+
+        if (filterPills.length > 0) {
+            filterPills.forEach(pill => {
+                pill.addEventListener('click', () => {
+                    applyPhotoFilter(pill.dataset.filter, pill.dataset.label);
+                });
+            });
+        }
+
+        // Modal Eliminar Fotografía
+        const modalEliminarFoto = document.getElementById('modalEliminarFoto');
+        if (modalEliminarFoto) {
+            const elimFotoId = document.getElementById('eliminarFotoId');
+            const elimFotoTxt = document.getElementById('eliminarFotoTexto');
+
+            document.querySelectorAll('.js-eliminar-foto').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    elimFotoId.value = btn.dataset.id;
+                    const descInfo = btn.dataset.desc ? `<br><span style="color:#d4d4d8; font-style:italic;">"${btn.dataset.desc}"</span>` : '';
+                    const partInfo = btn.dataset.partida ? ` de la partida <strong>"${btn.dataset.partida}"</strong>` : '';
+                    elimFotoTxt.innerHTML = `¿Deseas eliminar esta fotografía del tipo <strong>"${btn.dataset.tipo}"</strong>${partInfo}${descInfo} registrada el <strong>${btn.dataset.date}</strong>? Esta acción no se puede deshacer.`;
+                    openModal(modalEliminarFoto);
+                });
+            });
+        }
+
+        // Lightbox de Fotografía
+        const modalLightbox = document.getElementById('modalLightbox');
+        const lightboxImg = document.getElementById('lightboxImg');
+        const lightboxTitle = document.getElementById('lightboxTitle');
+        const lightboxDate = document.getElementById('lightboxDate');
+        const lightboxDesc = document.getElementById('lightboxDesc');
+        const lightboxDownload = document.getElementById('lightboxDownload');
+
+        function openLightbox(src, title, date, desc) {
+            if (!modalLightbox || !lightboxImg) return;
+            lightboxImg.src = src;
+            if (lightboxTitle) lightboxTitle.textContent = title || 'Fotografía de la Obra';
+            if (lightboxDate) lightboxDate.textContent = date || '';
+            if (lightboxDesc) {
+                if (desc && desc.trim()) {
+                    lightboxDesc.textContent = desc.trim();
+                    lightboxDesc.style.display = 'block';
+                } else {
+                    lightboxDesc.textContent = '';
+                    lightboxDesc.style.display = 'none';
+                }
+            }
+            if (lightboxDownload) lightboxDownload.href = src;
+            modalLightbox.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            if (!modalLightbox) return;
+            modalLightbox.classList.remove('open');
+            document.body.style.overflow = '';
+            if (lightboxImg) lightboxImg.src = '';
+            if (lightboxDesc) {
+                lightboxDesc.textContent = '';
+                lightboxDesc.style.display = 'none';
+            }
+        }
+
+        document.querySelectorAll('.js-lightbox-trigger').forEach(el => {
+            el.addEventListener('click', e => {
+                e.stopPropagation();
+                openLightbox(el.dataset.src, el.dataset.title, el.dataset.date, el.dataset.desc);
+            });
+        });
+
+        document.querySelectorAll('.foto-card').forEach(card => {
+            card.addEventListener('dblclick', e => {
+                if (e.target.closest('.js-eliminar-foto') || e.target.closest('.foto-partida-tag')) return;
+                const trigger = card.querySelector('.js-lightbox-trigger');
+                if (trigger) {
+                    openLightbox(trigger.dataset.src, trigger.dataset.title, trigger.dataset.date, trigger.dataset.desc);
+                }
+            });
+        });
+
+        document.querySelectorAll('.js-lightbox-close').forEach(btn => {
+            btn.addEventListener('click', closeLightbox);
+        });
+
+        if (modalLightbox) {
+            modalLightbox.addEventListener('click', e => {
+                if (e.target === modalLightbox || e.target.id === 'lightboxContent') {
+                    closeLightbox();
+                }
+            });
+        }
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && modalLightbox && modalLightbox.classList.contains('open')) {
+                closeLightbox();
+            }
+        });
     })();
     </script>
 </body>
