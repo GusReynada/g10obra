@@ -945,6 +945,29 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         .btn-hero-white svg { color: #09090b; transition: transform .2s var(--ease); }
         .btn-hero-white:hover svg { transform: scale(1.1); }
 
+        /* ---------- Botón Neón TOMAR FOTO (Acceso directo a cámara) ---------- */
+        .btn-camera-neon {
+            display: inline-flex; align-items: center; gap: .55rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .02em;
+            padding: .62rem 1.25rem; border-radius: 11px;
+            background: linear-gradient(135deg, #2ae083, #10b981); color: #042f1a; border: 1px solid rgba(42, 224, 131, 0.45);
+            cursor: pointer; text-decoration: none;
+            box-shadow: 0 4px 18px rgba(42, 224, 131, .32), 0 2px 6px rgba(0, 0, 0, .4);
+            transition: all .22s var(--ease);
+        }
+        .btn-camera-neon:hover {
+            background: linear-gradient(135deg, #38f898, #22c55e); color: #022c22;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(42, 224, 131, .5), 0 3px 8px rgba(0, 0, 0, .5);
+        }
+        .btn-camera-neon svg { color: #042f1a; transition: transform .2s var(--ease); }
+        .btn-camera-neon:hover svg { transform: scale(1.1); }
+
+        /* ---------- Barra Superior en Área de Fotos (sin tarjeta grande) ---------- */
+        .photos-top-bar {
+            display: flex; align-items: center; gap: .85rem; margin-bottom: 2rem; flex-wrap: wrap;
+        }
+
         /* ---------- Selector de Secciones (Insumos / Fotos) ---------- */
         .nav-section-tabs {
             display: flex; gap: .65rem; margin-bottom: 1.75rem;
@@ -1272,6 +1295,17 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             .hero-stats .stat-item { padding: .65rem .75rem; }
             .hero-stats .val { font-size: .95rem; }
             .breadcrumbs { font-size: .78rem; gap: .35rem; }
+            .photos-top-bar {
+                gap: .55rem;
+                margin-bottom: 1.5rem;
+            }
+            .photos-top-bar .btn-hero-white,
+            .photos-top-bar .btn-camera-neon {
+                flex: 1;
+                justify-content: center;
+                padding: .65rem .85rem;
+                font-size: .82rem;
+            }
 
             /* Modales en teléfonos móviles */
             .modal-backdrop {
@@ -1401,7 +1435,8 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 </div>
             <?php endif; ?>
 
-            <!-- Encabezado de la Partida -->
+            <?php if ($seccionActiva === 'insumos'): ?>
+            <!-- Encabezado de la Partida (Solo visible en sección de Insumos) -->
             <section class="partida-hero" aria-label="Información de la Partida">
                 <div class="hero-top">
                     <div class="hero-title-area">
@@ -1434,26 +1469,25 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                         </div>
                     </div>
 
-                    <!-- Acciones del Hero: Botón Blanco FOTOS y Menú de opciones de partida -->
+                    <!-- Acciones del Hero: Tomar Foto, Botón Blanco FOTOS y Menú de opciones de partida -->
                     <div class="hero-actions">
-                        <?php if ($seccionActiva === 'fotos'): ?>
-                            <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="btn-hero-white" id="btnToggleSeccion" title="Ver Insumos de la partida">
-                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-                                    <line x1="12" y1="22.08" x2="12" y2="12"/>
-                                </svg>
-                                <span>INSUMOS</span>
-                            </a>
-                        <?php else: ?>
-                            <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="btn-hero-white" id="btnIrFotos" title="Ver Fotografías de la partida">
+                        <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                            <button type="button" class="btn-camera-neon js-tomar-foto" id="btnTomarFotoHero" title="Tomar fotografía con cámara">
                                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                                     <circle cx="12" cy="13" r="4"/>
                                 </svg>
-                                <span>FOTOS</span>
-                            </a>
+                                <span>Tomar foto</span>
+                            </button>
                         <?php endif; ?>
+
+                        <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="btn-hero-white" id="btnIrFotos" title="Ver Fotografías de la partida">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                <circle cx="12" cy="13" r="4"/>
+                            </svg>
+                            <span>FOTOS</span>
+                        </a>
 
                         <?php if ($perm['modificar'] || $perm['eliminar']): ?>
                             <div class="hero-menu-wrap" id="heroMenuWrap">
@@ -1537,7 +1571,6 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 </a>
             </div>
 
-            <?php if ($seccionActiva === 'insumos'): ?>
             <!-- Sección de Insumos -->
             <section aria-labelledby="secInsumosTitle">
                 <div class="section-header-row">
@@ -1679,6 +1712,28 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 <?php endif; ?>
             </section>
             <?php else: ?>
+            <!-- Barra Superior en Área de Fotos (Sin tarjeta de partida, solo retorno a Insumos y Tomar Foto) -->
+            <div class="photos-top-bar" aria-label="Navegación de Fotografías">
+                <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="btn-hero-white" id="btnToggleSeccion" title="Volver a los insumos de la partida">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                        <line x1="12" y1="22.08" x2="12" y2="12"/>
+                    </svg>
+                    <span>INSUMOS</span>
+                </a>
+
+                <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                    <button type="button" class="btn-camera-neon js-tomar-foto" id="btnTomarFotoTop" title="Tomar fotografía con cámara">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                            <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                        <span>Tomar foto</span>
+                    </button>
+                <?php endif; ?>
+            </div>
+
             <!-- Sección de Fotografías -->
             <section aria-labelledby="secFotosTitle" id="secFotos">
                 <div class="section-header-row">
@@ -3134,32 +3189,39 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 });
             }
 
-            // Abrir modal agregar foto
+            function abrirModalFoto(modo = 'archivo') {
+                formFoto.reset();
+                fotoBase64.value = '';
+                photoPreviewImg.src = '';
+                panelPreview.style.display = 'none';
+                if (inpFotoDesc) {
+                    inpFotoDesc.value = '';
+                    if (countFotoDesc) countFotoDesc.textContent = '0/400';
+                }
+                if (dpFoto) {
+                    const hoyIso = iso(new Date());
+                    let defaultFecha = hoyIso;
+                    if (PARTIDA_INICIO && defaultFecha < PARTIDA_INICIO) {
+                        defaultFecha = PARTIDA_INICIO;
+                    } else if (PARTIDA_FIN && defaultFecha > PARTIDA_FIN) {
+                        defaultFecha = PARTIDA_FIN;
+                    }
+                    dpFoto.set(defaultFecha, true);
+                }
+                errBox.classList.remove('show');
+                btnGuardar.classList.remove('loading');
+                switchModo(modo);
+                openModal(modalAgregarFoto);
+            }
+
+            // Abrir modal agregar foto (Modo archivo)
             document.querySelectorAll('.js-abrir-foto').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    formFoto.reset();
-                    fotoBase64.value = '';
-                    photoPreviewImg.src = '';
-                    panelPreview.style.display = 'none';
-                    if (inpFotoDesc) {
-                        inpFotoDesc.value = '';
-                        if (countFotoDesc) countFotoDesc.textContent = '0/400';
-                    }
-                    if (dpFoto) {
-                        const hoyIso = iso(new Date());
-                        let defaultFecha = hoyIso;
-                        if (PARTIDA_INICIO && defaultFecha < PARTIDA_INICIO) {
-                            defaultFecha = PARTIDA_INICIO;
-                        } else if (PARTIDA_FIN && defaultFecha > PARTIDA_FIN) {
-                            defaultFecha = PARTIDA_FIN;
-                        }
-                        dpFoto.set(defaultFecha, true);
-                    }
-                    errBox.classList.remove('show');
-                    btnGuardar.classList.remove('loading');
-                    switchModo('archivo');
-                    openModal(modalAgregarFoto);
-                });
+                btn.addEventListener('click', () => abrirModalFoto('archivo'));
+            });
+
+            // Acceso directo: Tomar foto abriendo cámara de inmediato
+            document.querySelectorAll('.js-tomar-foto').forEach(btn => {
+                btn.addEventListener('click', () => abrirModalFoto('camara'));
             });
 
             // Envío del formulario
