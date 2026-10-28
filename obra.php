@@ -326,17 +326,28 @@ $csrf = csrf_token();
         .empty-partidas p { color: var(--muted); font-size: .9rem; max-width: 440px; margin: 0 auto 1.5rem; line-height: 1.55; }
         .no-results { display: none; text-align: center; color: var(--muted); padding: 2rem; font-size: .9rem; }
 
-        /* ---------- Modal ---------- */
+        /* ---------- Modal Responsivo ---------- */
         .modal-backdrop {
-            position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 1rem;
-            background: rgba(0,0,0,.65); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; justify-content: center; align-items: center;
+            padding: max(1rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+            background: rgba(0,0,0,.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
             opacity: 0; visibility: hidden; transition: opacity .25s var(--ease), visibility .25s;
+            overflow-y: auto; overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
         }
         .modal-backdrop.open { opacity: 1; visibility: visible; }
         .modal {
-            width: 100%; max-width: 560px; max-height: calc(100vh - 2rem); overflow: visible;
+            width: 100%; max-width: 580px;
+            margin: auto;
+            max-height: calc(100dvh - 2rem);
+            max-height: calc(100vh - 2rem);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
             background: #111114; border: 1px solid var(--border-strong); border-radius: 18px; padding: 1.75rem;
             box-shadow: 0 30px 80px -20px rgba(0,0,0,.9); transform: translateY(16px) scale(.98); transition: transform .3s var(--ease);
+            position: relative;
         }
         .modal-backdrop.open .modal { transform: none; }
         .modal-sm { max-width: 420px; text-align: center; }
@@ -407,18 +418,75 @@ $csrf = csrf_token();
         @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
         @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 
+        /* ---------- Responsive Media Queries ---------- */
+        @media (max-width: 900px) {
+            .app { padding: 1.25rem 1rem 3.5rem; }
+            .hero-stats { grid-template-columns: repeat(2, 1fr); }
+            .partidas-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+        }
+
         @media (max-width: 760px) {
-            .obra-hero { grid-template-columns: 1fr; }
+            .obra-hero { grid-template-columns: 1fr; padding: 1.25rem 1rem; }
+            .obra-hero-img { height: 200px; width: 100%; }
             .form-grid { grid-template-columns: 1fr; }
             .search-box input { min-width: 0; width: 100%; }
+            .section-header-row { flex-direction: column; align-items: stretch; gap: .85rem; }
             .section-header-row > * { width: 100%; }
-            .calendar.align-right { left: 0; right: auto; }
             .partidas-grid { grid-template-columns: 1fr; }
         }
+
+        @media (max-width: 640px) {
+            .topbar { padding: .75rem 0 1.25rem; }
+            .user-meta { display: none; }
+            .topbar .btn-ghost span { display: none; }
+            .topbar .btn-ghost { padding: .5rem; }
+            .hero-stats { grid-template-columns: repeat(2, 1fr); gap: .55rem; padding-top: 1rem; }
+            .hero-stats .stat-item { padding: .65rem .75rem; }
+            .hero-stats .val { font-size: .95rem; }
+
+            /* Modales en teléfonos móviles */
+            .modal-backdrop {
+                padding: 0.5rem 0.5rem max(0.75rem, env(safe-area-inset-bottom));
+                align-items: center;
+            }
+            .modal {
+                max-height: calc(100dvh - 1rem);
+                max-height: calc(100vh - 1rem);
+                padding: 1.25rem 1rem;
+                border-radius: 16px;
+            }
+            .modal-head { margin-bottom: 1rem; }
+            .modal-head h2 { font-size: 1.18rem; }
+            .modal-head p { font-size: .78rem; }
+            .modal-actions {
+                flex-direction: column-reverse;
+                gap: 0.55rem;
+                margin-top: 1.25rem;
+            }
+            .modal-actions .btn,
+            .modal-actions button {
+                width: 100% !important;
+                justify-content: center;
+                padding: 0.85rem 1.2rem !important;
+            }
+            .calendar {
+                width: min(290px, calc(100vw - 2.5rem));
+                left: 50% !important;
+                right: auto !important;
+                transform: translate(-50%, -6px);
+            }
+            .calendar.open {
+                transform: translate(-50%, 0);
+            }
+        }
+
         @media (max-width: 480px) {
+            .app { padding: 1rem 0.65rem 3rem; }
             .partida-card-inner { flex-direction: column; align-items: center; text-align: left; }
             .partida-card-info { width: 100%; }
             .partida-card-circle { margin-top: .75rem; }
+            .partida-actions { flex-wrap: wrap; }
+            .act-btn { min-width: calc(50% - .25rem); }
         }
     </style>
 </head>
@@ -733,7 +801,14 @@ $csrf = csrf_token();
         };
 
         // ---------------- Modales ----------------
-        const openModal = m => { m.classList.add('open'); document.body.style.overflow = 'hidden'; };
+        const openModal = m => {
+            if (!m) return;
+            m.classList.add('open');
+            document.body.style.overflow = 'hidden';
+            const mb = m.querySelector('.modal');
+            if (mb) mb.scrollTop = 0;
+            m.scrollTop = 0;
+        };
         const closeModal = m => { m.classList.remove('open'); document.body.style.overflow = ''; closeAllCalendars(); };
         document.querySelectorAll('.modal-backdrop').forEach(m => {
             m.addEventListener('mousedown', e => { if (e.target === m) closeModal(m); });

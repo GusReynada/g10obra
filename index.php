@@ -474,6 +474,36 @@ if (!empty($currentUser['nombre'])) {
             color: #ffffff;
             font-size: 0.95rem;
         }
+
+        /* ---------- Responsive Media Queries ---------- */
+        @media (max-width: 900px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .obras-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+        }
+
+        @media (max-width: 640px) {
+            .hero h1 { font-size: 1.65rem; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 0.75rem; margin: 1.5rem 0; }
+            .stat-card { padding: 1.1rem; }
+            .stat-card .num { font-size: 1.75rem; }
+            .section-header-row {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.85rem;
+            }
+            .section-header-row .btn {
+                width: 100% !important;
+                justify-content: center;
+            }
+            .obras-grid { grid-template-columns: 1fr; }
+            .obra-card-cover { height: 140px; }
+            .obra-card-body { padding: 1.15rem; }
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid { grid-template-columns: 1fr; }
+            .obra-meta-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>

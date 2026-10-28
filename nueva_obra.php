@@ -298,6 +298,42 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && 
             box-shadow: 0 0 20px rgba(121, 40, 202, 0.45), 0 4px 10px rgba(0, 0, 0, 0.4);
             border: 1px solid rgba(255, 255, 255, 0.35);
         }
+
+        /* ---------- Responsive Media Queries ---------- */
+        @media (max-width: 768px) {
+            .app { padding: 1.25rem 1rem 3.5rem; }
+            .section-card { padding: 1.35rem 1.15rem; }
+            .form-grid { grid-template-columns: 1fr; }
+            .actions-bar {
+                flex-direction: column-reverse;
+                gap: 0.75rem;
+                align-items: stretch;
+            }
+            .actions-bar .btn {
+                width: 100% !important;
+                justify-content: center;
+                padding: 0.85rem 1.2rem;
+            }
+        }
+
+        @media (max-width: 560px) {
+            .topbar { padding: .75rem 0 1.25rem; }
+            .user-meta { display: none; }
+            .topbar .btn-ghost span { display: none; }
+            .topbar .btn-ghost { padding: .5rem; }
+            .calc-preview {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.75rem;
+            }
+            .file-upload-box {
+                padding: 1.25rem 1rem;
+            }
+            .preview-img {
+                max-width: 100%;
+                height: auto;
+            }
+        }
     </style>
 </head>
 <body>
