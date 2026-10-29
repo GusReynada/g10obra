@@ -244,10 +244,12 @@ if ($puedeVer) {
 // ---------------------------------------------------------------------------
 $fotosObra = [];
 $catalogoTiposFotos = [];
+$hoyIso = date('Y-m-d');
 if ($puedeVer) {
     try {
         $stFotosObra = $db->prepare(
             "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin, f.pdfFechaFoto,
+                    DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) AS fechaEfectiva,
                     t.pdftDescripcion,
                     p.pdoClave, p.pdoDescripcion,
                     LENGTH(f.pdfFoto) AS fotoSize,
@@ -256,9 +258,19 @@ if ($puedeVer) {
                JOIN obrapartidas p ON p.idPartidaObra = f.idPartidaObra
           LEFT JOIN obrapartidasfotostipo t ON t.pdfTipo = f.pdfTipo
               WHERE p.idObra = ?
-              ORDER BY COALESCE(f.pdfFechaFoto, f.pdfFecha) DESC, f.idPartidaFoto DESC"
+              ORDER BY
+                    CASE
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) = ? THEN 1
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) > ? THEN 2
+                        ELSE 3
+                    END ASC,
+                    CASE
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) > ? THEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha))
+                    END ASC,
+                    DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) DESC,
+                    f.idPartidaFoto DESC"
         );
-        $stFotosObra->execute([$idObra]);
+        $stFotosObra->execute([$idObra, $hoyIso, $hoyIso, $hoyIso]);
         $fotosObra = $stFotosObra->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         $fotosObra = [];
@@ -330,6 +342,8 @@ $csrf = csrf_token();
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/auth.css?v=<?= filemtime(__DIR__ . '/assets/css/auth.css') ?>">
     <style>
+        html, body { height: auto !important; min-height: 100%; overflow-x: visible !important; }
+        .topbar { position: relative; }
         .avatar-img { object-fit: cover; border: 2px solid rgba(255,255,255,.25); box-shadow: 0 4px 12px rgba(0,0,0,.5); }
         .avatar.avatar-colorful {
             background: linear-gradient(135deg, #ff007f 0%, #7928ca 30%, #0070f3 65%, #00dfd8 100%);
@@ -337,25 +351,145 @@ $csrf = csrf_token();
             box-shadow: 0 0 20px rgba(121,40,202,.45), 0 4px 10px rgba(0,0,0,.4);
             border: 1px solid rgba(255,255,255,.35);
         }
-        .back-link { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--muted); margin-bottom: 1rem; transition: color .2s var(--ease); }
+        .back-link { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--muted); margin-bottom: .75rem; transition: color .2s var(--ease); }
         .back-link:hover { color: #fff; }
+        .btn-fixed-back {
+            position: fixed;
+            bottom: 1.5rem;
+            left: 1.5rem;
+            z-index: 90;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(20, 20, 24, 0.84);
+            border: 1px solid var(--border-strong);
+            color: #e4e4e7;
+            display: grid;
+            place-items: center;
+            text-decoration: none;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+            transition: all .22s var(--ease);
+        }
+        .btn-fixed-back:hover {
+            background: rgba(255, 255, 255, 0.14);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.45);
+            transform: translateX(-2px);
+        }
 
-        /* ---------- Encabezado de la obra ---------- */
+        /* ---------- Encabezado Sticky (Título y Ubicación) ---------- */
+        .sticky-title-placeholder {
+            margin: 0 0 1rem;
+        }
+        .sticky-title-bar {
+            position: -webkit-sticky;
+            position: sticky;
+            top: 0;
+            z-index: 80;
+            padding: .65rem .75rem .85rem;
+            margin: 0 -.75rem;
+            background: transparent;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            transition: background .22s var(--ease), backdrop-filter .22s var(--ease), border-color .22s var(--ease), box-shadow .22s var(--ease);
+        }
+        .sticky-title-bar.is-stuck {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            margin: 0;
+            padding: .65rem clamp(1rem, 4vw, 2.5rem) .8rem;
+            background: rgba(9, 9, 11, 0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom-color: rgba(255, 255, 255, 0.14);
+            box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.85);
+        }
+        .sticky-title-bar.is-stuck .sticky-title-inner {
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+        .sticky-title-bar h1 {
+            font-size: clamp(1.55rem, 2.8vw, 2.2rem);
+            line-height: 1.2;
+            margin: 0 0 .35rem;
+            color: #fff;
+            letter-spacing: -0.02em;
+        }
+        .obra-loc { display: flex; align-items: center; gap: .4rem; font-size: .9rem; color: var(--muted); margin: 0; }
+        .obra-loc svg { flex-shrink: 0; color: var(--subtle); }
+
+        /* ---------- Barra de Acciones (No Sticky) ---------- */
+        .obra-actions-bar {
+            display: flex;
+            align-items: center;
+            gap: .65rem;
+            margin-bottom: 2.15rem;
+            flex-wrap: wrap;
+        }
+        .hero-menu-wrap { position: relative; display: inline-flex; }
+        .btn-dots {
+            width: 40px; height: 40px; border-radius: 11px;
+            background: rgba(255,255,255,.06); border: 1px solid var(--border-strong);
+            color: #e4e4e7; display: grid; place-items: center;
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .btn-dots:hover, .btn-dots[aria-expanded="true"] {
+            background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.4);
+        }
+        .hero-dropdown-menu {
+            position: absolute; left: 0; top: calc(100% + 8px); z-index: 55;
+            min-width: 195px; background: #141417; border: 1px solid var(--border-strong);
+            border-radius: 12px; padding: .35rem; box-shadow: 0 18px 40px -10px rgba(0,0,0,.92);
+            opacity: 0; transform: translateY(-6px); pointer-events: none;
+            transition: opacity .18s var(--ease), transform .18s var(--ease);
+        }
+        .hero-dropdown-menu.open {
+            opacity: 1; transform: none; pointer-events: auto;
+        }
+        .hero-dropdown-item {
+            width: 100%; display: flex; align-items: center; gap: .65rem;
+            padding: .62rem .85rem; font: inherit; font-size: .85rem; font-weight: 600;
+            color: #e4e4e7; background: transparent; border: none; border-radius: 8px;
+            cursor: pointer; text-align: left; transition: all .15s var(--ease);
+        }
+        .hero-dropdown-item:hover {
+            background: rgba(255,255,255,.1); color: #fff;
+        }
+
+        /* ---------- Card de la obra (En ventana modal Más Información) ---------- */
         .obra-hero {
             display: grid; grid-template-columns: 260px 1fr; gap: 1.75rem;
-            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-            padding: 1.5rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-            margin-bottom: 2.25rem; animation: rise .5s var(--ease) both;
+            background: #141418; border: 1px solid var(--border-strong); border-radius: var(--radius);
+            padding: 1.65rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            position: relative;
+        }
+        .modal.modal-obra-card {
+            max-width: 760px;
+            padding: 0 !important;
+            background: transparent;
+            border: none;
+            box-shadow: 0 30px 80px -20px rgba(0,0,0,.95);
+            overflow: visible;
+        }
+        .modal-card-close {
+            position: absolute;
+            top: 1.15rem;
+            right: 1.15rem;
+            z-index: 5;
+            background: rgba(255,255,255,.06);
         }
         .obra-hero-img { width: 100%; height: 190px; border-radius: 12px; overflow: hidden; background: #18181b; display: grid; place-items: center; color: var(--subtle); border: 1px solid var(--border); }
         .obra-hero-img img { width: 100%; height: 100%; object-fit: cover; }
-        .obra-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
-        .obra-hero h1 { font-size: clamp(1.5rem, 2.6vw, 2.1rem); line-height: 1.2; margin: .55rem 0 .5rem; }
+        .obra-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; padding-right: 2.5rem; }
+        .obra-hero h1, .obra-hero .obra-hero-title { font-size: clamp(1.5rem, 2.6vw, 2.1rem); line-height: 1.2; margin: .55rem 0 .5rem; color: #fff; font-weight: 700; }
         .tag-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
         .tag { font-size: .72rem; font-weight: 700; color: var(--muted); background: rgba(255,255,255,.05); padding: .25rem .6rem; border-radius: 6px; border: 1px solid var(--border); letter-spacing: .03em; }
         .pill { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .25rem .7rem; border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.25); display: inline-flex; align-items: center; gap: .4rem; }
         .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 8px #4ade80; }
-        .obra-loc { display: flex; align-items: center; gap: .4rem; font-size: .88rem; color: var(--muted); }
         .hero-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .75rem; margin-top: 1.25rem; padding-top: 1.1rem; border-top: 1px solid var(--border); }
         .hero-stats .lbl { display: block; font-size: .68rem; text-transform: uppercase; color: var(--subtle); letter-spacing: .05em; margin-bottom: .2rem; }
         .hero-stats .val { font-weight: 700; color: #fff; font-size: 1rem; }
@@ -461,6 +595,32 @@ $csrf = csrf_token();
         .filtro-menu-item.active .filtro-item-count {
             background: #fff; color: #000;
         }
+        .fotos-header-controls {
+            display: flex; flex-direction: column; align-items: flex-end; gap: .6rem;
+        }
+        .fotos-header-top-btns {
+            display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; justify-content: flex-end;
+        }
+        .btn-filtro-fecha {
+            display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .02em;
+            padding: .58rem 1.2rem; border-radius: 11px;
+            background: #84b6f4; color: #ffffff; border: 1px solid #84b6f4;
+            cursor: pointer; transition: all .2s var(--ease);
+            box-shadow: 0 4px 14px rgba(132, 182, 244, .32);
+        }
+        .btn-filtro-fecha:hover {
+            background: #6da7f0; border-color: #6da7f0; color: #ffffff;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(132, 182, 244, .45);
+        }
+        .btn-filtro-fecha svg { color: #ffffff; flex-shrink: 0; }
+        .fecha-active-tag {
+            font-size: .72rem; font-weight: 700; padding: .12rem .5rem;
+            border-radius: 999px; background: rgba(0, 0, 0, .22); color: #ffffff;
+            display: none;
+        }
+        .fecha-active-tag.show { display: inline-block; }
 
         .filter-pills { display: flex; gap: .45rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
         .filter-pill {
@@ -594,10 +754,62 @@ $csrf = csrf_token();
         }
 
         /* ---------- Sección de partidas ---------- */
-        .section-header-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
-        .search-box { position: relative; }
-        .search-box input { padding-left: 2.3rem; min-width: 240px; }
-        .search-box svg { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--subtle); pointer-events: none; }
+        .btn-primary { margin-top: 0; }
+        .section-header-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
+        .section-header-actions { display: flex; align-items: center; gap: .5rem; }
+        .search-discreet {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            height: 36px;
+        }
+        .btn-lupa-discreta {
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            opacity: .75;
+            transition: color .2s var(--ease), opacity .2s var(--ease), background .2s var(--ease);
+            flex-shrink: 0;
+        }
+        .btn-lupa-discreta:hover,
+        .search-discreet.is-open .btn-lupa-discreta {
+            color: #fff;
+            opacity: 1;
+            background: rgba(255, 255, 255, .05);
+        }
+        .search-discreet .search-input-minimal {
+            width: 0;
+            opacity: 0;
+            padding: 0;
+            margin: 0;
+            border: none;
+            border-bottom: 1px solid transparent;
+            background: transparent;
+            color: #fff;
+            font: inherit;
+            font-size: .85rem;
+            height: 32px;
+            outline: none;
+            pointer-events: none;
+            transition: width .28s var(--ease), opacity .22s var(--ease), padding .28s var(--ease), border-color .22s var(--ease);
+        }
+        .search-discreet.is-open .search-input-minimal {
+            width: 210px;
+            opacity: 1;
+            padding: 0 .4rem;
+            margin-left: .2rem;
+            border-bottom-color: rgba(255, 255, 255, .28);
+            pointer-events: auto;
+        }
+        .section-header-row .btn-primary { height: 42px; margin: 0 !important; padding: 0 1.35rem !important; display: inline-flex; align-items: center; justify-content: center; }
 
         .partidas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 1.25rem; }
         .partida-card {
@@ -762,9 +974,7 @@ $csrf = csrf_token();
             .obra-hero { grid-template-columns: 1fr; padding: 1.25rem 1rem; }
             .obra-hero-img { height: 200px; width: 100%; }
             .form-grid { grid-template-columns: 1fr; }
-            .search-box input { min-width: 0; width: 100%; }
-            .section-header-row { flex-direction: column; align-items: stretch; gap: .85rem; }
-            .section-header-row > * { width: 100%; }
+            .search-discreet.is-open .search-input-minimal { width: 165px; }
             .partidas-grid { grid-template-columns: 1fr; }
             .fotos-grid { grid-template-columns: 1fr; }
             .filtro-dropdown-wrap { width: 100%; }
@@ -868,48 +1078,71 @@ $csrf = csrf_token();
             <?php if ($seccionActiva === 'fotos'): ?>
                 <a href="obra.php?id=<?= $idObra ?>" class="back-link">&larr; Volver a <?= htmlspecialchars($obra['obrNombreObra'] ?: 'la Obra') ?></a>
             <?php else: ?>
-                <a href="index.php#obras-activas" class="back-link">&larr; Volver a Obras Activas</a>
+                <a href="index.php#obras-activas" class="btn-fixed-back" id="btnVolverObrasFixed" title="Volver a Obras Activas" aria-label="Volver a Obras Activas">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                </a>
             <?php endif; ?>
 
             <?php if ($seccionActiva !== 'fotos'): ?>
-            <!-- Encabezado de la obra -->
-            <section class="obra-hero" aria-label="Datos de la obra">
-                <div class="obra-hero-img">
-                    <?php if ($obraFotoData): ?>
-                        <img src="<?= $obraFotoData ?>" alt="<?= htmlspecialchars($obra['obrNombreObra']) ?>">
-                    <?php else: ?>
-                        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                    <?php endif; ?>
-                </div>
-                <div>
-                    <div class="obra-hero-top">
-                        <div class="tag-row">
-                            <span class="tag"><?= htmlspecialchars($obra['obrContrato'] ?: 'S/N CONTRATO') ?></span>
-                            <span class="pill"><?= htmlspecialchars($statusLabel) ?></span>
-                        </div>
-                        <?php if ($puedeVer): ?>
-                            <a href="obra.php?id=<?= $idObra ?>&seccion=fotos" class="btn-hero-white" id="btnFotosDeLaObra" title="Ver todas las fotografías de la obra">
-                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                                    <circle cx="12" cy="13" r="4"/>
-                                </svg>
-                                <span>FOTOS DE LA OBRA</span>
-                            </a>
+            <!-- Elemento Sticky: Título y Ubicación de la obra -->
+            <div class="sticky-title-placeholder" id="stickyObraPlaceholder">
+                <div class="sticky-title-bar" id="stickyObraHeader" aria-label="Encabezado de la obra">
+                    <div class="sticky-title-inner">
+                        <h1><?= htmlspecialchars($obra['obrNombreObra'] ?: 'Obra sin nombre') ?></h1>
+                        <?php if (!empty($obra['obrUbicacion'])): ?>
+                            <p class="obra-loc">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                <span><?= htmlspecialchars($obra['obrUbicacion']) ?></span>
+                            </p>
                         <?php endif; ?>
                     </div>
-                    <h1><?= htmlspecialchars($obra['obrNombreObra'] ?: 'Obra sin nombre') ?></h1>
-                    <?php if (!empty($obra['obrUbicacion'])): ?>
-                        <p class="obra-loc">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                            <?= htmlspecialchars($obra['obrUbicacion']) ?>
-                        </p>
-                    <?php endif; ?>
-                    <div class="hero-stats">
-                        <div><span class="lbl">Partidas</span><span class="val"><?= count($partidas) ?></span></div>
-                        <div><span class="lbl">Fotos de la Obra</span><span class="val"><?= $totalFotosObra ?></span></div>
+                </div>
+            </div>
+
+            <!-- Botones de acción de la obra (No forman parte del elemento sticky) -->
+            <div class="obra-actions-bar" aria-label="Acciones de la obra">
+                <?php if ($puedeVer): ?>
+                    <a href="obra.php?id=<?= $idObra ?>&seccion=fotos" class="btn-hero-white" id="btnFotosDeLaObra" title="Ver todas las fotografías de la obra">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                            <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                        <span>FOTOS DE LA OBRA</span>
+                    </a>
+                <?php endif; ?>
+
+                <div class="hero-menu-wrap" id="obraMenuWrap">
+                    <button type="button" class="btn-dots" id="btnObraDots" aria-haspopup="true" aria-expanded="false" title="Más opciones de la obra">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="5" r="1.8"/>
+                            <circle cx="12" cy="12" r="1.8"/>
+                            <circle cx="12" cy="19" r="1.8"/>
+                        </svg>
+                    </button>
+                    <div class="hero-dropdown-menu" id="obraDropdownMenu" role="menu">
+                        <?php if ($perm['agregar']): ?>
+                            <button type="button" class="hero-dropdown-item js-nueva-partida" id="btnNuevaPartidaMenu" role="menuitem">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                                <span>+ Nueva partida</span>
+                            </button>
+                        <?php endif; ?>
+                        <button type="button" class="hero-dropdown-item js-mas-info-obra" id="btnMasInfoObra" role="menuitem">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <span>Más información</span>
+                        </button>
                     </div>
                 </div>
-            </section>
+            </div>
             <?php endif; ?>
 
             <?php if ($flashSuccess): ?>
@@ -941,20 +1174,16 @@ $csrf = csrf_token();
                                 <h2 id="partidasTitle" style="font-size: 1.4rem; font-weight: 700; color: #fff;">Partidas de la obra</h2>
                                 <span class="badge" style="position: static; font-size: .72rem; padding: .2rem .6rem;"><?= count($partidas) ?></span>
                             </div>
-                            <p style="color: var(--muted); font-size: .88rem; margin-top: .35rem;">Desglose de actividades, claves y cronograma.</p>
+                            
                         </div>
                         <?php if (!empty($partidas)): ?>
-                            <div style="display: flex; gap: .75rem; flex-wrap: wrap;">
-                                <label class="search-box">
-                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                                    <input type="search" id="buscarPartida" class="input-control" placeholder="Buscar por clave o descripción" aria-label="Buscar partida">
-                                </label>
-                                <?php if ($perm['agregar']): ?>
-                                    <button type="button" class="btn btn-primary js-nueva-partida" id="btnNuevaPartida" style="width: auto; padding: .65rem 1.35rem; font-size: .88rem;">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                        <span>Nueva partida</span>
+                            <div class="section-header-actions">
+                                <div class="search-discreet" id="searchDiscreetWrap">
+                                    <button type="button" class="btn-lupa-discreta" id="btnToggleSearch" title="Buscar partida" aria-label="Buscar partida">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                     </button>
-                                <?php endif; ?>
+                                    <input type="search" id="buscarPartida" class="search-input-minimal" placeholder="Buscar partida..." aria-label="Buscar partida" autocomplete="off">
+                                </div>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1082,36 +1311,51 @@ $csrf = csrf_token();
                     </div>
 
                     <?php if (!empty($fotosObra)): ?>
-                        <div class="filtro-dropdown-wrap" id="filtroDropdownWrap">
-                            <button type="button" class="btn-filtro-fotos" id="btnFiltroFotos" aria-haspopup="true" aria-expanded="false" title="Filtrar por tipo de fotografía">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
-                                </svg>
-                                <span>FILTRO</span>
-                                <span class="filtro-active-tag" id="filtroActiveTag">Todas (<?= $totalFotosObra ?>)</span>
-                                <svg class="filtro-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="6 9 12 15 18 9"/>
-                                </svg>
-                            </button>
-
-                            <div class="filtro-dropdown-menu" id="filtroDropdownMenu" role="menu" aria-label="Filtrar por tipo de fotografía">
-                                <div class="filtro-menu-header">Filtrar por tipo de fotografía</div>
-                                <button type="button" class="filtro-menu-item active" data-filter="all" data-label="Todas (<?= $totalFotosObra ?>)" role="menuitem">
-                                    <span class="filtro-item-dot dot-all"></span>
-                                    <span class="filtro-item-lbl">Todas las fotografías</span>
-                                    <span class="filtro-item-count"><?= $totalFotosObra ?></span>
-                                </button>
-                                <?php foreach ($catalogoTiposFotos as $ctf):
-                                    $tipoId = (int)$ctf['pdfTipo'];
-                                    $cnt = $conteoPorTipo[$tipoId] ?? 0;
-                                ?>
-                                    <button type="button" class="filtro-menu-item" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)" role="menuitem">
-                                        <span class="filtro-item-dot dot-tipo-<?= $tipoId ?>"></span>
-                                        <span class="filtro-item-lbl"><?= htmlspecialchars($ctf['pdftDescripcion']) ?></span>
-                                        <span class="filtro-item-count"><?= $cnt ?></span>
+                        <div class="fotos-header-controls">
+                            <div class="fotos-header-top-btns">
+                                <div class="filtro-dropdown-wrap" id="filtroDropdownWrap">
+                                    <button type="button" class="btn-filtro-fotos" id="btnFiltroFotos" aria-haspopup="true" aria-expanded="false" title="Filtrar por tipo de fotografía">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                                        </svg>
+                                        <span>FILTRO</span>
+                                        <span class="filtro-active-tag" id="filtroActiveTag">Todas (<?= $totalFotosObra ?>)</span>
+                                        <svg class="filtro-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="6 9 12 15 18 9"/>
+                                        </svg>
                                     </button>
-                                <?php endforeach; ?>
+
+                                    <div class="filtro-dropdown-menu" id="filtroDropdownMenu" role="menu" aria-label="Filtrar por tipo de fotografía">
+                                        <div class="filtro-menu-header">Filtrar por tipo de fotografía</div>
+                                        <button type="button" class="filtro-menu-item active" data-filter="all" data-label="Todas (<?= $totalFotosObra ?>)" role="menuitem">
+                                            <span class="filtro-item-dot dot-all"></span>
+                                            <span class="filtro-item-lbl">Todas las fotografías</span>
+                                            <span class="filtro-item-count"><?= $totalFotosObra ?></span>
+                                        </button>
+                                        <?php foreach ($catalogoTiposFotos as $ctf):
+                                            $tipoId = (int)$ctf['pdfTipo'];
+                                            $cnt = $conteoPorTipo[$tipoId] ?? 0;
+                                        ?>
+                                            <button type="button" class="filtro-menu-item" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)" role="menuitem">
+                                                <span class="filtro-item-dot dot-tipo-<?= $tipoId ?>"></span>
+                                                <span class="filtro-item-lbl"><?= htmlspecialchars($ctf['pdftDescripcion']) ?></span>
+                                                <span class="filtro-item-count"><?= $cnt ?></span>
+                                            </button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
                             </div>
+
+                            <button type="button" class="btn-filtro-fecha" id="btnFiltroFecha" title="Filtrar fotografías por rango de fechas">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="3" y="4" width="18" height="18" rx="2"/>
+                                    <line x1="16" y1="2" x2="16" y2="6"/>
+                                    <line x1="8" y1="2" x2="8" y2="6"/>
+                                    <line x1="3" y1="10" x2="21" y2="10"/>
+                                </svg>
+                                <span>Fecha</span>
+                                <span class="fecha-active-tag" id="fechaActiveTag"></span>
+                            </button>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -1144,8 +1388,9 @@ $csrf = csrf_token();
                             $partidaClave = $foto['pdoClave'] ?: 'S/C';
                             $partidaDesc  = $foto['pdoDescripcion'] ?: '';
                             $lightboxTitleTxt = $tipoDesc . ' · Partida ' . $partidaClave;
+                            $fechaEfectivaIso = $foto['fechaEfectiva'] ?? '';
                         ?>
-                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-full-src="<?= $imgFullSrc ?>">
+                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-fecha="<?= htmlspecialchars($fechaEfectivaIso) ?>" data-full-src="<?= $imgFullSrc ?>">
                                 <div class="foto-thumb-wrap js-lightbox-trigger"
                                      data-src="<?= $imgFullSrc ?>"
                                      data-title="<?= htmlspecialchars($lightboxTitleTxt) ?>"
@@ -1346,6 +1591,96 @@ $csrf = csrf_token();
         </div>
     </div>
     <?php endif; ?>
+
+    <!-- Modal: Filtrar Fotografías por Rango de Fechas -->
+    <div class="modal-backdrop" id="modalFiltroFecha" role="dialog" aria-modal="true" aria-labelledby="modalFiltroFechaTitle">
+        <div class="modal" style="max-width: 480px; overflow: visible;">
+            <div class="modal-head">
+                <div>
+                    <h2 id="modalFiltroFechaTitle">Filtrar por fecha</h2>
+                    <p>Selecciona una fecha de inicio y una de fin para mostrar únicamente las fotografías dentro de ese rango.</p>
+                </div>
+                <button type="button" class="modal-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+
+            <div class="alert alert-error modal-error" id="modalFiltroFechaError" role="alert">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span id="modalFiltroFechaErrorText"></span>
+            </div>
+
+            <div class="form-grid">
+                <div>
+                    <label class="form-label" for="filtroFechaIniTxt">Fecha de inicio</label>
+                    <div class="date-field" id="dfFiltroIni">
+                        <input class="input-control date-text" type="text" id="filtroFechaIniTxt" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
+                        <input type="hidden" id="filtroFechaIni" value="">
+                        <button type="button" class="date-btn" aria-label="Abrir calendario de fecha de inicio" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </button>
+                        <div class="calendar"></div>
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label" for="filtroFechaFinTxt">Fecha de fin</label>
+                    <div class="date-field" id="dfFiltroFin">
+                        <input class="input-control date-text" type="text" id="filtroFechaFinTxt" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
+                        <input type="hidden" id="filtroFechaFin" value="">
+                        <button type="button" class="date-btn" aria-label="Abrir calendario de fecha de fin" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </button>
+                        <div class="calendar align-right"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions" style="justify-content: space-between;">
+                <button type="button" class="btn btn-ghost" id="btnLimpiarFiltroFecha" style="padding: .75rem 1.2rem;">Mostrar todas</button>
+                <div style="display: flex; gap: .6rem;">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .75rem 1.2rem;">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btnAplicarFiltroFecha" style="width: auto; padding: .75rem 1.5rem; background: #84b6f4; color: #fff; border: 1px solid #84b6f4;">Aplicar filtro</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Más información de la Obra (Card Modal) -->
+    <div class="modal-backdrop" id="modalInfoObra" role="dialog" aria-modal="true" aria-labelledby="modalInfoObraTitle">
+        <div class="modal modal-obra-card">
+            <section class="obra-hero" aria-label="Datos de la obra">
+                <button type="button" class="modal-close modal-card-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+                <div class="obra-hero-img">
+                    <?php if ($obraFotoData): ?>
+                        <img src="<?= $obraFotoData ?>" alt="<?= htmlspecialchars($obra['obrNombreObra']) ?>">
+                    <?php else: ?>
+                        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                    <?php endif; ?>
+                </div>
+                <div>
+                    <div class="obra-hero-top">
+                        <div class="tag-row">
+                            <span class="tag"><?= htmlspecialchars($obra['obrContrato'] ?: 'S/N CONTRATO') ?></span>
+                            <span class="pill"><?= htmlspecialchars($statusLabel) ?></span>
+                        </div>
+                    </div>
+                    <h2 id="modalInfoObraTitle" class="obra-hero-title"><?= htmlspecialchars($obra['obrNombreObra'] ?: 'Obra sin nombre') ?></h2>
+                    <?php if (!empty($obra['obrUbicacion'])): ?>
+                        <p class="obra-loc">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                            <?= htmlspecialchars($obra['obrUbicacion']) ?>
+                        </p>
+                    <?php endif; ?>
+                    <div class="hero-stats">
+                        <div><span class="lbl">Partidas</span><span class="val"><?= count($partidas) ?></span></div>
+                        <div><span class="lbl">Fotos de la Obra</span><span class="val"><?= $totalFotosObra ?></span></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
 
     <!-- Lightbox de fotografía a pantalla completa -->
     <div class="lightbox-modal" id="modalLightbox" role="dialog" aria-modal="true" aria-label="Visualizador de Fotografía">
@@ -1612,8 +1947,10 @@ $csrf = csrf_token();
             }));
         }
 
-        // ---------------- Búsqueda ----------------
+        // ---------------- Búsqueda (Lupa Discreta) ----------------
         const buscar = document.getElementById('buscarPartida');
+        const searchWrap = document.getElementById('searchDiscreetWrap');
+        const btnToggleSearch = document.getElementById('btnToggleSearch');
         if (buscar) {
             const cards = document.querySelectorAll('.partida-card');
             const none = document.getElementById('noResults');
@@ -1623,36 +1960,133 @@ $csrf = csrf_token();
                 cards.forEach(c => { const ok = c.dataset.search.includes(q); c.style.display = ok ? '' : 'none'; if (ok) visibles++; });
                 none.style.display = visibles ? 'none' : 'block';
             });
+
+            if (btnToggleSearch && searchWrap) {
+                btnToggleSearch.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = searchWrap.classList.toggle('is-open');
+                    if (open) {
+                        setTimeout(() => buscar.focus(), 50);
+                    } else if (buscar.value !== '') {
+                        buscar.value = '';
+                        buscar.dispatchEvent(new Event('input'));
+                    }
+                });
+
+                buscar.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        buscar.value = '';
+                        buscar.dispatchEvent(new Event('input'));
+                        searchWrap.classList.remove('is-open');
+                        buscar.blur();
+                    }
+                });
+
+                document.addEventListener('click', (e) => {
+                    if (!searchWrap.contains(e.target) && !buscar.value.trim()) {
+                        searchWrap.classList.remove('is-open');
+                    }
+                });
+            }
         }
 
-        // ---------------- Sección FOTOS DE LA OBRA: Botón FILTRO, Píldoras y Lightbox ----------------
+        // ---------------- Menú 3 puntos y Modal Más Información de la Obra ----------------
+        const btnObraDots = document.getElementById('btnObraDots');
+        const obraDropdownMenu = document.getElementById('obraDropdownMenu');
+        const btnMasInfoObra = document.getElementById('btnMasInfoObra');
+        const modalInfoObra = document.getElementById('modalInfoObra');
+
+        if (btnObraDots && obraDropdownMenu) {
+            btnObraDots.addEventListener('click', e => {
+                e.stopPropagation();
+                const isOpen = obraDropdownMenu.classList.toggle('open');
+                btnObraDots.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            });
+
+            document.addEventListener('click', e => {
+                if (!obraDropdownMenu.contains(e.target) && e.target !== btnObraDots) {
+                    obraDropdownMenu.classList.remove('open');
+                    btnObraDots.setAttribute('aria-expanded', 'false');
+                }
+            });
+
+            obraDropdownMenu.querySelectorAll('.hero-dropdown-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    obraDropdownMenu.classList.remove('open');
+                    btnObraDots.setAttribute('aria-expanded', 'false');
+                });
+            });
+        }
+
+        if (btnMasInfoObra && modalInfoObra) {
+            btnMasInfoObra.addEventListener('click', () => {
+                openModal(modalInfoObra);
+            });
+        }
+
+        // Efecto visual al quedar pegado (sticky) en el tope superior (Escritorio y Celular)
+        const stickyObraHeader = document.getElementById('stickyObraHeader');
+        const stickyObraPlaceholder = document.getElementById('stickyObraPlaceholder');
+        if (stickyObraHeader && stickyObraPlaceholder) {
+            const updateStickyState = () => {
+                const phRect = stickyObraPlaceholder.getBoundingClientRect();
+                const shouldStick = phRect.top <= 0;
+                if (shouldStick) {
+                    if (!stickyObraHeader.classList.contains('is-stuck')) {
+                        stickyObraPlaceholder.style.height = stickyObraHeader.offsetHeight + 'px';
+                        stickyObraHeader.classList.add('is-stuck');
+                    }
+                } else {
+                    if (stickyObraHeader.classList.contains('is-stuck')) {
+                        stickyObraHeader.classList.remove('is-stuck');
+                        stickyObraPlaceholder.style.height = '';
+                    }
+                }
+            };
+            window.addEventListener('scroll', updateStickyState, { passive: true });
+            document.addEventListener('scroll', updateStickyState, { passive: true, capture: true });
+            window.addEventListener('touchmove', updateStickyState, { passive: true });
+            window.addEventListener('resize', updateStickyState, { passive: true });
+            updateStickyState();
+        }
+
+        // ---------------- Sección FOTOS DE LA OBRA: Botón FILTRO, Fecha y Lightbox ----------------
         const btnFiltroFotos = document.getElementById('btnFiltroFotos');
         const filtroDropdownMenu = document.getElementById('filtroDropdownMenu');
         const filtroActiveTag = document.getElementById('filtroActiveTag');
         const menuItems = document.querySelectorAll('#filtroDropdownMenu .filtro-menu-item');
-        const filterPills = document.querySelectorAll('#fotoFilters .filter-pill');
         const fotoCards = document.querySelectorAll('#fotosGrid .foto-card');
         const noResultsFotos = document.getElementById('noResultsFotos');
 
-        function applyPhotoFilter(filterVal, labelTxt) {
-            menuItems.forEach(item => {
-                item.classList.toggle('active', item.dataset.filter === filterVal);
-            });
-            filterPills.forEach(pill => {
-                pill.classList.toggle('active', pill.dataset.filter === filterVal);
-            });
-            if (filtroActiveTag && labelTxt) {
-                filtroActiveTag.textContent = labelTxt;
-            }
+        let currentTypeFilter = 'all';
+        let currentFechaIni = '';
+        let currentFechaFin = '';
+
+        function updateFotosVisibility() {
             let visibles = 0;
             fotoCards.forEach(card => {
-                const show = (filterVal === 'all' || card.dataset.tipo === filterVal);
+                const matchTipo = (currentTypeFilter === 'all' || card.dataset.tipo === currentTypeFilter);
+                const f = card.dataset.fecha || '';
+                const matchIni = (!currentFechaIni || (f && f >= currentFechaIni));
+                const matchFin = (!currentFechaFin || (f && f <= currentFechaFin));
+                const show = matchTipo && matchIni && matchFin;
                 card.style.display = show ? 'flex' : 'none';
                 if (show) visibles++;
             });
             if (noResultsFotos) {
                 noResultsFotos.style.display = visibles > 0 ? 'none' : 'block';
             }
+        }
+
+        function applyPhotoFilter(filterVal, labelTxt) {
+            currentTypeFilter = filterVal;
+            menuItems.forEach(item => {
+                item.classList.toggle('active', item.dataset.filter === filterVal);
+            });
+            if (filtroActiveTag && labelTxt) {
+                filtroActiveTag.textContent = labelTxt;
+            }
+            updateFotosVisibility();
         }
 
         if (btnFiltroFotos && filtroDropdownMenu) {
@@ -1678,12 +2112,91 @@ $csrf = csrf_token();
             });
         }
 
-        if (filterPills.length > 0) {
-            filterPills.forEach(pill => {
-                pill.addEventListener('click', () => {
-                    applyPhotoFilter(pill.dataset.filter, pill.dataset.label);
-                });
+        // Filtro por rango de fechas (Botón Fecha #84b6f4)
+        const btnFiltroFecha = document.getElementById('btnFiltroFecha');
+        const modalFiltroFecha = document.getElementById('modalFiltroFecha');
+        const fechaActiveTag = document.getElementById('fechaActiveTag');
+        if (btnFiltroFecha && modalFiltroFecha) {
+            const dfIni = document.getElementById('dfFiltroIni');
+            const dfFin = document.getElementById('dfFiltroFin');
+            const dpFiltroIni = dfIni ? DatePicker(dfIni) : null;
+            const dpFiltroFin = dfFin ? DatePicker(dfFin) : null;
+            const errFechaBox = document.getElementById('modalFiltroFechaError');
+            const errFechaTxt = document.getElementById('modalFiltroFechaErrorText');
+            const btnAplicarFecha = document.getElementById('btnAplicarFiltroFecha');
+            const btnLimpiarFecha = document.getElementById('btnLimpiarFiltroFecha');
+
+            if (dpFiltroIni && dpFiltroFin) {
+                dpFiltroIni.rangeOther = () => dpFiltroFin.get();
+                dpFiltroFin.rangeOther = () => dpFiltroIni.get();
+                dpFiltroIni.onChange = () => { dpFiltroFin.min = dpFiltroIni.get() || null; };
+                dpFiltroFin.onChange = () => { dpFiltroIni.max = dpFiltroFin.get() || null; };
+            }
+
+            btnFiltroFecha.addEventListener('click', () => {
+                if (errFechaBox) errFechaBox.classList.remove('show');
+                if (dpFiltroIni) dpFiltroIni.set(currentFechaIni, true);
+                if (dpFiltroFin) dpFiltroFin.set(currentFechaFin, true);
+                openModal(modalFiltroFecha);
             });
+
+            if (btnAplicarFecha) {
+                btnAplicarFecha.addEventListener('click', () => {
+                    if (errFechaBox) errFechaBox.classList.remove('show');
+                    const ini = dpFiltroIni ? dpFiltroIni.get() : '';
+                    const fin = dpFiltroFin ? dpFiltroFin.get() : '';
+                    const txtIni = dpFiltroIni ? dpFiltroIni.txt.value.trim() : '';
+                    const txtFin = dpFiltroFin ? dpFiltroFin.txt.value.trim() : '';
+
+                    if ((txtIni && !ini) || (txtFin && !fin)) {
+                        if (errFechaTxt) errFechaTxt.textContent = 'Revisa el formato de las fechas (dd/mm/aaaa).';
+                        if (errFechaBox) errFechaBox.classList.add('show');
+                        return;
+                    }
+                    if (ini && fin && fin < ini) {
+                        if (errFechaTxt) errFechaTxt.textContent = 'La fecha de fin no puede ser anterior a la fecha de inicio.';
+                        if (errFechaBox) errFechaBox.classList.add('show');
+                        return;
+                    }
+
+                    currentFechaIni = ini || '';
+                    currentFechaFin = fin || '';
+
+                    if (fechaActiveTag) {
+                        if (currentFechaIni && currentFechaFin) {
+                            fechaActiveTag.textContent = `${isoToTxt(currentFechaIni)} - ${isoToTxt(currentFechaFin)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else if (currentFechaIni) {
+                            fechaActiveTag.textContent = `Desde ${isoToTxt(currentFechaIni)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else if (currentFechaFin) {
+                            fechaActiveTag.textContent = `Hasta ${isoToTxt(currentFechaFin)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else {
+                            fechaActiveTag.textContent = '';
+                            fechaActiveTag.classList.remove('show');
+                        }
+                    }
+
+                    updateFotosVisibility();
+                    closeModal(modalFiltroFecha);
+                });
+            }
+
+            if (btnLimpiarFecha) {
+                btnLimpiarFecha.addEventListener('click', () => {
+                    currentFechaIni = '';
+                    currentFechaFin = '';
+                    if (dpFiltroIni) { dpFiltroIni.set('', true); dpFiltroIni.max = null; }
+                    if (dpFiltroFin) { dpFiltroFin.set('', true); dpFiltroFin.min = null; }
+                    if (fechaActiveTag) {
+                        fechaActiveTag.textContent = '';
+                        fechaActiveTag.classList.remove('show');
+                    }
+                    updateFotosVisibility();
+                    closeModal(modalFiltroFecha);
+                });
+            }
         }
 
         // Modal Eliminar Fotografía

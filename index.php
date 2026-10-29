@@ -27,6 +27,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && 
 
         $authError = auth_attempt($username, $password);
         if ($authError === null) {
+            $_SESSION['just_logged_in'] = true;
             // Login exitoso: Redirigir a index.php para evitar reenvío de formulario
             header('Location: index.php');
             exit;
@@ -235,6 +236,10 @@ if ($db) {
 // Mensaje de éxito tras registrar obra
 $flashSuccess = $_SESSION['flash_success'] ?? null;
 unset($_SESSION['flash_success']);
+
+// Bandera para mostrar el mensaje de bienvenida únicamente al iniciar sesión
+$showWelcomeOverlay = !empty($_SESSION['just_logged_in']);
+unset($_SESSION['just_logged_in']);
 
 // Iniciales del usuario para el avatar
 $initials = 'U';
@@ -487,22 +492,109 @@ if (!empty($currentUser['nombre'])) {
             .stat-card { padding: 1.1rem; }
             .stat-card .num { font-size: 1.75rem; }
             .section-header-row {
-                flex-direction: column;
-                align-items: stretch;
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
                 gap: 0.85rem;
-            }
-            .section-header-row .btn {
-                width: 100% !important;
-                justify-content: center;
             }
             .obras-grid { grid-template-columns: 1fr; }
             .obra-card-cover { height: 140px; }
             .obra-card-body { padding: 1.15rem; }
         }
 
+        /* Menú de 3 puntos en Obras Activas */
+        .hero-menu-wrap { position: relative; display: inline-flex; }
+        .btn-dots {
+            width: 40px; height: 40px; border-radius: 11px;
+            background: rgba(255,255,255,.06); border: 1px solid var(--border-strong);
+            color: #e4e4e7; display: grid; place-items: center;
+            cursor: pointer; transition: all .2s var(--ease);
+        }
+        .btn-dots:hover, .btn-dots[aria-expanded="true"] {
+            background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.4);
+        }
+        .hero-dropdown-menu {
+            position: absolute; right: 0; top: calc(100% + 8px); z-index: 55;
+            min-width: 225px; background: #141417; border: 1px solid var(--border-strong);
+            border-radius: 12px; padding: .35rem; box-shadow: 0 18px 40px -10px rgba(0,0,0,.92);
+            opacity: 0; transform: translateY(-6px); pointer-events: none;
+            transition: opacity .18s var(--ease), transform .18s var(--ease);
+        }
+        .hero-dropdown-menu.open {
+            opacity: 1; transform: none; pointer-events: auto;
+        }
+        .hero-dropdown-item {
+            width: 100%; display: flex; align-items: center; gap: .65rem;
+            padding: .62rem .85rem; font: inherit; font-size: .85rem; font-weight: 600;
+            color: #e4e4e7; background: transparent; border: none; border-radius: 8px;
+            cursor: pointer; text-align: left; text-decoration: none; transition: all .15s var(--ease);
+        }
+        .hero-dropdown-item:hover {
+            background: rgba(255,255,255,.1); color: #fff;
+        }
+
         @media (max-width: 480px) {
             .stats-grid { grid-template-columns: 1fr; }
             .obra-meta-grid { grid-template-columns: 1fr; }
+        }
+
+        /* Overlay de Bienvenida al iniciar sesión (1.5s con fondo oscurecido al 70%) */
+        .welcome-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: rgba(0, 0, 0, 0.70);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            text-align: center;
+            opacity: 0;
+            animation: welcomeBackdropIn 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .welcome-overlay.is-leaving {
+            pointer-events: none;
+            animation: welcomeBackdropOut 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+        .welcome-message {
+            font-family: 'Outfit', sans-serif;
+            font-size: clamp(2rem, 5vw, 3.4rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: #ffffff;
+            margin: 0;
+            line-height: 1.2;
+            text-shadow: 0 12px 32px rgba(0, 0, 0, 0.75);
+            opacity: 0;
+            transform: translateY(18px) scale(0.96);
+            animation: welcomeTextIn 0.7s 0.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .welcome-overlay.is-leaving .welcome-message {
+            animation: welcomeTextOut 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+        .welcome-message .grad, .grad {
+            background: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        @keyframes welcomeBackdropIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes welcomeBackdropOut {
+            0%   { opacity: 1; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
+            100% { opacity: 0; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); }
+        }
+        @keyframes welcomeTextIn {
+            from { opacity: 0; transform: translateY(18px) scale(0.96); filter: blur(4px); }
+            to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+        }
+        @keyframes welcomeTextOut {
+            0%   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+            100% { opacity: 0; transform: translateY(-14px) scale(1.03); filter: blur(8px); }
         }
     </style>
 </head>
@@ -540,11 +632,24 @@ if (!empty($currentUser['nombre'])) {
 
         <!-- Contenido Principal -->
         <main class="content">
-            <div class="hero">
-                
-                <h1>Bienvenido, <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
-                <p>Aqui podras gestionar las obras, sus partidas, insumos y modulos.</p>
-            </div>
+            <?php if ($showWelcomeOverlay): ?>
+                <div class="welcome-overlay" id="welcomeOverlay" role="status" aria-live="polite">
+                    <h1 class="welcome-message">Bienvenido <span class="grad"><?= htmlspecialchars($currentUser['nombre']) ?></span></h1>
+                </div>
+                <script>
+                    (function () {
+                        const overlay = document.getElementById('welcomeOverlay');
+                        if (!overlay) return;
+                        // Espera a que termine la entrada (0.7s) + 1.5s visible en pantalla
+                        setTimeout(() => {
+                            overlay.classList.add('is-leaving');
+                            setTimeout(() => {
+                                overlay.remove();
+                            }, 1450);
+                        }, 2150);
+                    })();
+                </script>
+            <?php endif; ?>
 
             <?php if (!empty($flashSuccess)): ?>
                 <div class="alert alert-info" style="margin-top: 1.5rem; margin-bottom: 1.5rem; background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.3); color: #ffffff;">
@@ -561,13 +666,27 @@ if (!empty($currentUser['nombre'])) {
                             <h2 style="font-size: 1.4rem; font-weight: 700; color: #ffffff;">Obras Activas</h2>
                             <span class="badge" style="position: static; font-size: 0.72rem; padding: 0.2rem 0.6rem;"><?= count($obrasActivas) ?></span>
                         </div>
-                        <p style="color: var(--muted); font-size: 0.88rem; margin-top: 0.35rem;">Proyectos vigentes y su desglose presupuestal.</p>
+                    
                     </div>
 
-                    <a href="nueva_obra.php" class="btn btn-primary" style="width: auto; padding: 0.65rem 1.35rem; font-size: 0.88rem;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        <span>Registrar nueva obra</span>
-                    </a>
+                    <div class="hero-menu-wrap" id="indexMenuWrap">
+                        <button type="button" class="btn-dots" id="btnIndexDots" aria-haspopup="true" aria-expanded="false" title="Más opciones">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                <circle cx="12" cy="5" r="1.8"/>
+                                <circle cx="12" cy="12" r="1.8"/>
+                                <circle cx="12" cy="19" r="1.8"/>
+                            </svg>
+                        </button>
+                        <div class="hero-dropdown-menu" id="indexDropdownMenu" role="menu">
+                            <a href="nueva_obra.php" class="hero-dropdown-item" role="menuitem">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                                <span>+ Registrar nueva obra</span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
 
                 <?php if (empty($obrasActivas)): ?>
@@ -630,48 +749,28 @@ if (!empty($currentUser['nombre'])) {
                 <?php endif; ?>
             </section>
 
-            <!-- Módulos del Sistema -->
-            <h2 style="font-size: 1.15rem; font-weight: 700; margin-top: 2rem;">Módulos del Sistema</h2>
-            <div class="modules">
-                <a href="nueva_obra.php" class="module" style="display: block;">
-                    <span class="badge" style="background: rgba(255, 255, 255, 0.12); color: #ffffff;">+ Registrar</span>
-                    <div class="m-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                    </div>
-                    <h3>Gestión de Obras</h3>
-                    <p>Tabla <code>obra</code>. Alta, edición, cálculo de IVA, retención, montos y estatus de obras.</p>
-                </a>
-
-                <div class="module">
-                    <span class="badge">Pendiente</span>
-                    <div class="m-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                    </div>
-                    <h3>Partidas de Obra</h3>
-                    <p>Tabla <code>obrapartidas</code>. Desglose de actividades, claves y cronograma por obra.</p>
-                </div>
-
-                <div class="module">
-                    <span class="badge">Pendiente</span>
-                    <div class="m-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                    </div>
-                    <h3>Catálogo de Insumos</h3>
-                    <p>Tablas <code>insumos</code> y <code>obrapartidasinsumos</code>. Asignación de cantidades y saldos.</p>
-                </div>
-
-                <div class="module">
-                    <span class="badge">Configurado</span>
-                    <div class="m-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    </div>
-                    <h3>Usuarios y Permisos</h3>
-                    <p>Tablas <code>usuarios</code>, <code>usuariosmodulos</code> y <code>usuariosmodulosmodulos</code>.</p>
-                </div>
-            </div>
-
-           
         </main>
     </div>
+
+    <script>
+        (function () {
+            const btnDots = document.getElementById('btnIndexDots');
+            const menu = document.getElementById('indexDropdownMenu');
+            if (!btnDots || !menu) return;
+
+            btnDots.addEventListener('click', function (e) {
+                e.stopPropagation();
+                const isOpen = menu.classList.toggle('open');
+                btnDots.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            });
+
+            document.addEventListener('click', function (e) {
+                if (!menu.contains(e.target) && e.target !== btnDots) {
+                    menu.classList.remove('open');
+                    btnDots.setAttribute('aria-expanded', 'false');
+                }
+            });
+        })();
+    </script>
 </body>
 </html>

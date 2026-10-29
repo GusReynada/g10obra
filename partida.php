@@ -584,19 +584,31 @@ if ($perm['agregar'] || $perm['modificar']) {
 // ---------------------------------------------------------------------------
 $fotosPartida = [];
 $catalogoTiposFotos = [];
+$hoyIso = date('Y-m-d');
 if ($puedeVer) {
     try {
         $stFotos = $db->prepare(
             "SELECT f.idPartidaFoto, f.idPartidaObra, f.pdfFecha, f.pdfTipo, f.pdfDescripcion, f.usuLogin, f.pdfFechaFoto,
+                    DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) AS fechaEfectiva,
                     t.pdftDescripcion,
                     LENGTH(f.pdfFoto) AS fotoSize,
                     LENGTH(COALESCE(f.pdfFotoMiniatura, f.pdfFoto)) AS thumbSize
                FROM obrapartidasfotos f
           LEFT JOIN obrapartidasfotostipo t ON t.pdfTipo = f.pdfTipo
               WHERE f.idPartidaObra = ?
-              ORDER BY COALESCE(f.pdfFechaFoto, f.pdfFecha) DESC, f.idPartidaFoto DESC"
+              ORDER BY
+                    CASE
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) = ? THEN 1
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) > ? THEN 2
+                        ELSE 3
+                    END ASC,
+                    CASE
+                        WHEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) > ? THEN DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha))
+                    END ASC,
+                    DATE(COALESCE(f.pdfFechaFoto, f.pdfFecha)) DESC,
+                    f.idPartidaFoto DESC"
         );
-        $stFotos->execute([$idPartida]);
+        $stFotos->execute([$idPartida, $hoyIso, $hoyIso, $hoyIso]);
         $fotosPartida = $stFotos->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         $fotosPartida = [];
@@ -677,9 +689,10 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             --radius: 16px;
             --ease: cubic-bezier(0.16, 1, 0.3, 1);
         }
-        body { color: var(--text); background: #000; overflow-x: hidden; }
+        html, body { height: auto !important; min-height: 100%; overflow-x: visible !important; }
+        body { color: var(--text); background: #000; }
         .app { max-width: 1240px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
-        .topbar { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0 2rem; }
+        .topbar { position: relative; display: flex; justify-content: space-between; align-items: center; padding: 1rem 0 2rem; background: transparent; border-bottom: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
         .logo a { text-decoration: none; color: #fff; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 1.25rem; }
         .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, #ff007f, #7928ca); display: grid; place-items: center; color: #fff; font-size: .8rem; font-weight: 800; }
         .user-chip { display: flex; align-items: center; gap: .75rem; background: var(--surface); padding: .35rem .8rem .35rem .45rem; border: 1px solid var(--border); border-radius: 999px; }
@@ -688,47 +701,111 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         .user-meta strong { font-size: .85rem; color: #fff; }
 
         /* ---------- Breadcrumbs & Navegación ---------- */
-        .breadcrumbs { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); margin-bottom: 1.25rem; flex-wrap: wrap; }
+        .breadcrumbs { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); margin-bottom: .75rem; flex-wrap: wrap; }
         .breadcrumbs a { color: var(--muted); text-decoration: none; transition: color .2s var(--ease); display: inline-flex; align-items: center; gap: .35rem; }
         .breadcrumbs a:hover { color: #fff; }
         .breadcrumbs .sep { color: var(--subtle); font-size: .75rem; }
         .breadcrumbs .current { color: #fff; font-weight: 600; }
 
-        /* ---------- Hero de la Partida ---------- */
-        .partida-hero {
-            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-            padding: 1.75rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-            margin-bottom: 2rem; animation: rise .45s var(--ease) both;
-            box-shadow: 0 20px 45px -15px rgba(0,0,0,.6);
+        /* ---------- Encabezado Sticky de la Partida (Título y Ubicación) ---------- */
+        .sticky-title-placeholder {
+            margin: 0 0 1rem;
         }
-        .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.2rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
-        .hero-title-area { flex: 1; min-width: 280px; }
+        .sticky-title-bar {
+            position: -webkit-sticky;
+            position: sticky;
+            top: 0;
+            z-index: 80;
+            padding: .65rem .75rem .85rem;
+            margin: 0 -.75rem;
+            background: transparent;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            transition: background .22s var(--ease), backdrop-filter .22s var(--ease), border-color .22s var(--ease), box-shadow .22s var(--ease);
+        }
+        .sticky-title-bar.is-stuck {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            margin: 0;
+            padding: .65rem clamp(1rem, 4vw, 2.5rem) .8rem;
+            background: rgba(9, 9, 11, 0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom-color: rgba(255, 255, 255, 0.14);
+            box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.85);
+        }
+        .sticky-title-bar.is-stuck .sticky-title-inner {
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+        .sticky-title-bar h1 {
+            font-size: clamp(1.4rem, 2.5vw, 2rem);
+            line-height: 1.22;
+            margin: 0 0 .38rem;
+            color: #fff;
+            letter-spacing: -0.02em;
+        }
+        .partida-obra-parent { display: flex; align-items: center; gap: .45rem; font-size: .88rem; color: var(--muted); flex-wrap: wrap; }
+        .partida-obra-parent svg { color: var(--subtle); flex-shrink: 0; }
+        .partida-obra-parent strong { color: #e4e4e7; }
+
+        /* ---------- Barra de Acciones de la Partida (No Sticky) ---------- */
+        .partida-actions-bar {
+            display: flex;
+            gap: .65rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 1.85rem;
+        }
+
+        /* ---------- Card de la Partida (En ventana modal Más Información) ---------- */
+        .partida-hero {
+            background: #141418; border: 1px solid var(--border-strong); border-radius: var(--radius);
+            padding: 1.75rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            position: relative;
+        }
+        .modal.modal-partida-card {
+            max-width: 780px;
+            padding: 0 !important;
+            background: transparent;
+            border: none;
+            box-shadow: 0 30px 80px -20px rgba(0,0,0,.95);
+            overflow: visible;
+        }
+        .modal-card-close {
+            position: absolute;
+            top: 1.15rem;
+            right: 1.15rem;
+            z-index: 5;
+            background: rgba(255,255,255,.06);
+        }
+        .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.2rem; flex-wrap: wrap; margin-bottom: 1.1rem; padding-right: 2.5rem; }
+        .hero-title-area { flex: 1; min-width: 260px; }
         .clave-badge {
             display: inline-flex; align-items: center; gap: .5rem;
             font-family: 'Outfit', sans-serif; font-size: .84rem; font-weight: 800; letter-spacing: .06em;
             color: #fff; background: rgba(255,255,255,.08); border: 1px solid var(--border-strong);
             padding: .32rem .75rem; border-radius: 8px; margin-bottom: .6rem;
         }
-        .partida-hero h1 { font-size: clamp(1.4rem, 2.4vw, 1.95rem); line-height: 1.25; margin: 0 0 .5rem; color: #fff; }
-        .partida-obra-parent { display: flex; align-items: center; gap: .4rem; font-size: .88rem; color: var(--muted); }
-        .partida-obra-parent svg { color: var(--subtle); }
-        .partida-obra-parent strong { color: #e4e4e7; }
+        .partida-hero h1, .partida-hero .partida-hero-title { font-size: clamp(1.35rem, 2.3vw, 1.85rem); line-height: 1.25; margin: 0 0 .5rem; color: #fff; font-weight: 700; }
 
         .hero-actions { display: flex; gap: .6rem; align-items: center; }
-        .hero-menu-wrap { position: relative; }
+        .hero-menu-wrap { position: relative; display: inline-flex; }
         .btn-dots {
-            width: 36px; height: 36px; border-radius: 10px;
-            background: rgba(255,255,255,.05); border: 1px solid var(--border);
-            color: var(--muted); display: grid; place-items: center;
+            width: 40px; height: 40px; border-radius: 11px;
+            background: rgba(255,255,255,.06); border: 1px solid var(--border-strong);
+            color: #e4e4e7; display: grid; place-items: center;
             cursor: pointer; transition: all .2s var(--ease);
         }
         .btn-dots:hover, .btn-dots[aria-expanded="true"] {
-            background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.3);
+            background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.4);
         }
         .hero-dropdown-menu {
-            position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
-            min-width: 175px; background: #141417; border: 1px solid var(--border-strong);
-            border-radius: 12px; padding: .35rem; box-shadow: 0 18px 40px -10px rgba(0,0,0,.9);
+            position: absolute; left: 0; top: calc(100% + 8px); z-index: 55;
+            min-width: 195px; background: #141417; border: 1px solid var(--border-strong);
+            border-radius: 12px; padding: .35rem; box-shadow: 0 18px 40px -10px rgba(0,0,0,.92);
             opacity: 0; transform: translateY(-6px); pointer-events: none;
             transition: opacity .18s var(--ease), transform .18s var(--ease);
         }
@@ -768,11 +845,60 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         .hero-stats .lbl { display: block; font-size: .68rem; text-transform: uppercase; color: var(--subtle); letter-spacing: .05em; margin-bottom: .25rem; font-weight: 700; }
         .hero-stats .val { font-weight: 700; color: #fff; font-size: 1.05rem; }
 
-        /* ---------- Barra de Acciones de Insumos ---------- */
-        .section-header-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
-        .search-box { position: relative; }
-        .search-box input { padding-left: 2.3rem; min-width: 250px; }
-        .search-box svg { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--subtle); pointer-events: none; }
+        /* ---------- Barra de Acciones de Insumos (Iconos simbólicos blancos sin fondo) ---------- */
+        .btn-primary { margin-top: 0; }
+        .section-header-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
+        .insumos-symbolic-actions { display: inline-flex; align-items: center; gap: .35rem; }
+        .btn-icon-symbolic {
+            width: 36px;
+            height: 36px;
+            border-radius: 999px;
+            border: none;
+            background: transparent;
+            color: #ffffff;
+            display: inline-grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            transition: transform .2s var(--ease), opacity .2s var(--ease);
+            flex-shrink: 0;
+        }
+        .btn-icon-symbolic:hover {
+            opacity: .8;
+            transform: scale(1.1);
+        }
+        .search-discreet {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            height: 36px;
+        }
+        .search-discreet .search-input-minimal {
+            width: 0;
+            opacity: 0;
+            padding: 0;
+            margin: 0;
+            border: none;
+            border-bottom: 1px solid transparent;
+            background: transparent;
+            color: #ffffff;
+            font: inherit;
+            font-size: .85rem;
+            height: 32px;
+            outline: none;
+            pointer-events: none;
+            transition: width .28s var(--ease), opacity .22s var(--ease), padding .28s var(--ease), border-color .22s var(--ease);
+        }
+        .search-discreet.is-open .search-input-minimal {
+            width: 200px;
+            opacity: 1;
+            padding: 0 .4rem;
+            margin-left: .2rem;
+            border-bottom-color: rgba(255, 255, 255, .38);
+            pointer-events: auto;
+        }
+        .section-header-row .btn-primary { height: 42px; margin: 0 !important; padding: 0 1.35rem !important; display: inline-flex; align-items: center; justify-content: center; }
 
         /* ---------- Tabla / Listado de Insumos ---------- */
         .insumos-card-table {
@@ -927,45 +1053,67 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         .cal-link { background: none; border: none; color: #a1a1aa; font: inherit; font-size: .78rem; cursor: pointer; font-weight: 600; }
         .cal-link:hover { color: #fff; }
 
-        /* ---------- Botón Blanco FOTOS ---------- */
+        /* ---------- Botón Blanco FOTOS (Compacto) ---------- */
         .btn-hero-white {
-            display: inline-flex; align-items: center; gap: .55rem;
-            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .03em;
-            padding: .62rem 1.25rem; border-radius: 11px;
+            display: inline-flex; align-items: center; gap: .4rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .78rem; font-weight: 700; letter-spacing: .03em;
+            padding: .42rem .9rem; border-radius: 9px;
             background: #ffffff; color: #09090b; border: 1px solid #ffffff;
             cursor: pointer; text-decoration: none;
-            box-shadow: 0 4px 18px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .4);
+            box-shadow: 0 4px 14px rgba(255, 255, 255, .2), 0 2px 5px rgba(0, 0, 0, .4);
             transition: all .22s var(--ease);
         }
         .btn-hero-white:hover {
             background: #f4f4f5; color: #000;
             transform: translateY(-1px);
-            box-shadow: 0 8px 24px rgba(255, 255, 255, .35), 0 3px 8px rgba(0, 0, 0, .5);
+            box-shadow: 0 6px 18px rgba(255, 255, 255, .32), 0 3px 7px rgba(0, 0, 0, .5);
         }
         .btn-hero-white svg { color: #09090b; transition: transform .2s var(--ease); }
-        .btn-hero-white:hover svg { transform: scale(1.1); }
+        .btn-hero-white:hover svg { transform: scale(1.08); }
 
-        /* ---------- Botón Neón TOMAR FOTO (Acceso directo a cámara) ---------- */
+        /* ---------- Botón Neón TOMAR FOTO (Compacto) ---------- */
         .btn-camera-neon {
-            display: inline-flex; align-items: center; gap: .55rem;
-            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .02em;
-            padding: .62rem 1.25rem; border-radius: 11px;
+            display: inline-flex; align-items: center; gap: .4rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .78rem; font-weight: 700; letter-spacing: .02em;
+            padding: .42rem .9rem; border-radius: 9px;
             background: linear-gradient(135deg, #2ae083, #10b981); color: #042f1a; border: 1px solid rgba(42, 224, 131, 0.45);
             cursor: pointer; text-decoration: none;
-            box-shadow: 0 4px 18px rgba(42, 224, 131, .32), 0 2px 6px rgba(0, 0, 0, .4);
+            box-shadow: 0 4px 14px rgba(42, 224, 131, .28), 0 2px 5px rgba(0, 0, 0, .4);
             transition: all .22s var(--ease);
         }
         .btn-camera-neon:hover {
             background: linear-gradient(135deg, #38f898, #22c55e); color: #022c22;
             transform: translateY(-1px);
-            box-shadow: 0 8px 24px rgba(42, 224, 131, .5), 0 3px 8px rgba(0, 0, 0, .5);
+            box-shadow: 0 6px 18px rgba(42, 224, 131, .45), 0 3px 7px rgba(0, 0, 0, .5);
         }
         .btn-camera-neon svg { color: #042f1a; transition: transform .2s var(--ease); }
-        .btn-camera-neon:hover svg { transform: scale(1.1); }
+        .btn-camera-neon:hover svg { transform: scale(1.08); }
 
-        /* ---------- Barra Superior en Área de Fotos (sin tarjeta grande) ---------- */
-        .photos-top-bar {
-            display: flex; align-items: center; gap: .85rem; margin-bottom: 2rem; flex-wrap: wrap;
+        /* ---------- Flecha fija de retorno en esquina inferior izquierda ---------- */
+        .btn-fixed-back {
+            position: fixed;
+            bottom: 1.5rem;
+            left: 1.5rem;
+            z-index: 90;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(20, 20, 24, 0.84);
+            border: 1px solid var(--border-strong);
+            color: #e4e4e7;
+            display: grid;
+            place-items: center;
+            text-decoration: none;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+            transition: all .22s var(--ease);
+        }
+        .btn-fixed-back:hover {
+            background: rgba(255, 255, 255, 0.14);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.45);
+            transform: translateX(-2px);
         }
 
         /* ---------- Selector de Secciones (Insumos / Fotos) ---------- */
@@ -992,19 +1140,112 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         }
         .tab-section-btn.active .tab-count-badge { background: #fff; color: #000; }
 
-        /* ---------- Filtros de Fotos ---------- */
-        .filter-pills { display: flex; gap: .45rem; flex-wrap: wrap; margin-bottom: 1.35rem; }
-        .filter-pill {
-            padding: .4rem .9rem; font-size: .8rem; font-weight: 600;
-            border-radius: 999px; border: 1px solid var(--border);
-            background: rgba(255,255,255,.04); color: var(--muted);
+        /* ---------- Botón FILTRO y Botón Fecha en Fotografías ---------- */
+        .fotos-header-controls {
+            display: flex; flex-direction: column; align-items: flex-end; gap: .6rem;
+        }
+        .fotos-header-top-btns {
+            display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; justify-content: flex-end;
+        }
+        .filtro-dropdown-wrap {
+            position: relative; display: inline-block;
+        }
+        .btn-filtro-fotos {
+            display: inline-flex; align-items: center; gap: .55rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .03em;
+            height: 42px; padding: 0 1.15rem; border-radius: 11px;
+            background: rgba(255, 255, 255, .08); color: #fff; border: 1px solid var(--border-strong);
             cursor: pointer; transition: all .2s var(--ease);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
         }
-        .filter-pill:hover { color: #fff; background: rgba(255,255,255,.08); }
-        .filter-pill.active {
-            background: #fff; color: #000; font-weight: 700;
-            border-color: #fff; box-shadow: 0 4px 12px rgba(255,255,255,.2);
+        .btn-filtro-fotos:hover,
+        .btn-filtro-fotos[aria-expanded="true"] {
+            background: rgba(255, 255, 255, .15); border-color: rgba(255, 255, 255, .45);
+            transform: translateY(-1px);
         }
+        .filtro-active-tag {
+            font-size: .72rem; font-weight: 700; padding: .15rem .55rem;
+            border-radius: 999px; background: #fff; color: #09090b;
+            letter-spacing: .02em;
+        }
+        .filtro-chevron {
+            color: var(--muted); transition: transform .2s var(--ease);
+        }
+        .btn-filtro-fotos[aria-expanded="true"] .filtro-chevron {
+            transform: rotate(180deg); color: #fff;
+        }
+        .filtro-dropdown-menu {
+            position: absolute; right: 0; top: calc(100% + 8px); z-index: 60;
+            min-width: 240px; background: #141418; border: 1px solid var(--border-strong);
+            border-radius: 14px; padding: .45rem;
+            box-shadow: 0 22px 48px -10px rgba(0, 0, 0, .92);
+            opacity: 0; transform: translateY(-8px); pointer-events: none;
+            transition: opacity .18s var(--ease), transform .18s var(--ease);
+        }
+        .filtro-dropdown-menu.open {
+            opacity: 1; transform: none; pointer-events: auto;
+        }
+        .filtro-menu-header {
+            font-size: .68rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .06em; color: var(--subtle);
+            padding: .45rem .75rem .35rem; border-bottom: 1px solid var(--border);
+            margin-bottom: .3rem;
+        }
+        .filtro-menu-item {
+            width: 100%; display: flex; align-items: center; gap: .65rem;
+            padding: .6rem .75rem; font: inherit; font-size: .85rem; font-weight: 600;
+            color: #d4d4d8; background: transparent; border: none; border-radius: 9px;
+            cursor: pointer; text-align: left; transition: all .15s var(--ease);
+        }
+        .filtro-menu-item:hover {
+            background: rgba(255, 255, 255, .08); color: #fff;
+        }
+        .filtro-menu-item.active {
+            background: rgba(255, 255, 255, .14); color: #fff; font-weight: 700;
+        }
+        .filtro-item-dot {
+            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+            background: #fff;
+        }
+        .filtro-item-dot.dot-all { background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.6); }
+        .filtro-item-dot.dot-tipo-1 { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,.6); }
+        .filtro-item-dot.dot-tipo-2 { background: #34d399; box-shadow: 0 0 6px rgba(52,211,153,.6); }
+        .filtro-item-dot.dot-tipo-3 { background: #c084fc; box-shadow: 0 0 6px rgba(192,132,252,.6); }
+        .filtro-item-dot.dot-tipo-4 { background: #38bdf8; box-shadow: 0 0 6px rgba(56,189,248,.6); }
+        .filtro-item-dot.dot-tipo-5 { background: #fbbf24; box-shadow: 0 0 6px rgba(251,191,36,.6); }
+        .filtro-item-dot.dot-tipo-6 { background: #a3e635; box-shadow: 0 0 6px rgba(163,230,53,.6); }
+        .filtro-item-dot.dot-tipo-7 { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,.6); }
+        .filtro-item-dot.dot-tipo-8 { background: #fb923c; box-shadow: 0 0 6px rgba(251,146,60,.6); }
+        .filtro-item-dot.dot-tipo-9 { background: #f472b6; box-shadow: 0 0 6px rgba(244,114,182,.6); }
+        .filtro-item-dot.dot-tipo-10 { background: #94a3b8; box-shadow: 0 0 6px rgba(148,163,184,.6); }
+        .filtro-item-lbl { flex: 1; }
+        .filtro-item-count {
+            font-size: .72rem; font-weight: 700; padding: .1rem .48rem;
+            border-radius: 999px; background: rgba(255, 255, 255, .1); color: var(--muted);
+        }
+        .filtro-menu-item.active .filtro-item-count {
+            background: #fff; color: #000;
+        }
+        .btn-filtro-fecha {
+            display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+            font-family: 'Outfit', 'Inter', sans-serif; font-size: .86rem; font-weight: 700; letter-spacing: .02em;
+            padding: .58rem 1.2rem; border-radius: 11px;
+            background: #84b6f4; color: #ffffff; border: 1px solid #84b6f4;
+            cursor: pointer; transition: all .2s var(--ease);
+            box-shadow: 0 4px 14px rgba(132, 182, 244, .32);
+        }
+        .btn-filtro-fecha:hover {
+            background: #6da7f0; border-color: #6da7f0; color: #ffffff;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(132, 182, 244, .45);
+        }
+        .btn-filtro-fecha svg { color: #ffffff; flex-shrink: 0; }
+        .fecha-active-tag {
+            font-size: .72rem; font-weight: 700; padding: .12rem .5rem;
+            border-radius: 999px; background: rgba(0, 0, 0, .22); color: #ffffff;
+            display: none;
+        }
+        .fecha-active-tag.show { display: inline-block; }
 
         /* ---------- Grid y Cards de Fotos ---------- */
         .fotos-grid {
@@ -1274,9 +1515,7 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             .hero-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
             .partida-hero h1 { font-size: 1.45rem; }
             .partida-progress-container { max-width: 100%; }
-            .section-header-row { flex-direction: column; align-items: stretch; gap: .85rem; }
-            .section-header-row > * { width: 100%; }
-            .search-box input { width: 100%; min-width: 0; }
+            .search-discreet.is-open .search-input-minimal { width: 155px; }
             .form-grid { grid-template-columns: 1fr; }
             .fotos-grid { grid-template-columns: 1fr; }
             .tab-section-btn { flex: 1; justify-content: center; text-align: center; }
@@ -1436,126 +1675,79 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             <?php endif; ?>
 
             <?php if ($seccionActiva === 'insumos'): ?>
-            <!-- Encabezado de la Partida (Solo visible en sección de Insumos) -->
-            <section class="partida-hero" aria-label="Información de la Partida">
-                <div class="hero-top">
-                    <div class="hero-title-area">
-                        <div class="clave-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-                            CLAVE: <?= htmlspecialchars($partida['pdoClave'] ?: 'S/C') ?>
-                        </div>
+            <!-- Elemento Sticky: Título y Ubicación de la Partida -->
+            <div class="sticky-title-placeholder" id="stickyPartidaPlaceholder">
+                <div class="sticky-title-bar" id="stickyPartidaHeader" aria-label="Encabezado de la Partida">
+                    <div class="sticky-title-inner">
                         <h1><?= htmlspecialchars($partida['pdoDescripcion'] ?: 'Partida sin descripción') ?></h1>
                         <div class="partida-obra-parent">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                            <span>Obra: <strong><?= htmlspecialchars($partida['obrNombreObra']) ?></strong></span>
-                            <?php if (!empty($partida['obrContrato'])): ?>
-                                <span style="color: var(--subtle);">&bull;</span>
-                                <span>Contrato: <?= htmlspecialchars($partida['obrContrato']) ?></span>
-                            <?php endif; ?>
-                        </div>
-
-                        <!-- Barra Porcentual de Avance (Diseño Cápsula Neón - Estática) -->
-                        <div class="partida-progress-container" aria-label="Avance físico de la partida: <?= $porcentajeAvance ?>%">
-                            <div class="progress-pill-track" id="partidaProgressTrack" role="progressbar" aria-valuenow="<?= $porcentajeAvance ?>" aria-valuemin="0" aria-valuemax="100">
-                                <div class="progress-pill-fill" id="partidaProgressFill" style="width: <?= $porcentajeAvance ?>%;">
-                                    <?php if ($porcentajeAvance >= 14): ?>
-                                        <span class="progress-pill-text in-fill"><?= $porcentajeAvance ?>%</span>
-                                    <?php endif; ?>
-                                </div>
-                                <?php if ($porcentajeAvance < 14): ?>
-                                    <span class="progress-pill-text outside-fill"><?= $porcentajeAvance ?>%</span>
-                                <?php endif; ?>
-                            </div>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                            <span><?= htmlspecialchars(!empty($partida['obrUbicacion']) ? $partida['obrUbicacion'] : $partida['obrNombreObra']) ?></span>
                         </div>
                     </div>
+                </div>
+            </div>
 
-                    <!-- Acciones del Hero: Tomar Foto, Botón Blanco FOTOS y Menú de opciones de partida -->
-                    <div class="hero-actions">
-                        <?php if ($perm['agregar'] || $perm['modificar']): ?>
-                            <button type="button" class="btn-camera-neon js-tomar-foto" id="btnTomarFotoHero" title="Tomar fotografía con cámara">
-                                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                                    <circle cx="12" cy="13" r="4"/>
+            <!-- Botones de acción de la Partida (No forman parte del elemento sticky) -->
+            <div class="partida-actions-bar" aria-label="Acciones de la Partida">
+                <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                    <button type="button" class="btn-camera-neon js-tomar-foto" id="btnTomarFotoHero" title="Tomar fotografía con cámara">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                            <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                        <span>Tomar foto</span>
+                    </button>
+                <?php endif; ?>
+
+                <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="btn-hero-white" id="btnIrFotos" title="Ver Fotografías de la partida">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    <span>FOTOS</span>
+                </a>
+
+                <div class="hero-menu-wrap" id="heroMenuWrap">
+                    <button type="button" class="btn-dots" id="btnHeroDots" aria-haspopup="true" aria-expanded="false" title="Más opciones de la partida">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="5" r="1.8"/>
+                            <circle cx="12" cy="12" r="1.8"/>
+                            <circle cx="12" cy="19" r="1.8"/>
+                        </svg>
+                    </button>
+                    <div class="hero-dropdown-menu" id="heroDropdownMenu" role="menu">
+                        <button type="button" class="hero-dropdown-item js-mas-info-partida" id="btnMasInfoPartida" role="menuitem">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <span>Más información</span>
+                        </button>
+                        <?php if ($perm['modificar']): ?>
+                            <button type="button" class="hero-dropdown-item js-avance-partida" id="btnAvancePartida" role="menuitem">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="18" y1="20" x2="18" y2="10"/>
+                                    <line x1="12" y1="20" x2="12" y2="4"/>
+                                    <line x1="6" y1="20" x2="6" y2="14"/>
                                 </svg>
-                                <span>Tomar foto</span>
+                                <span>Avance</span>
+                            </button>
+                            <button type="button" class="hero-dropdown-item js-editar-partida" id="btnEditarPartida" role="menuitem">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                <span>Editar partida</span>
                             </button>
                         <?php endif; ?>
-
-                        <a href="partida.php?id=<?= $idPartida ?>&seccion=fotos" class="btn-hero-white" id="btnIrFotos" title="Ver Fotografías de la partida">
-                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                                <circle cx="12" cy="13" r="4"/>
-                            </svg>
-                            <span>FOTOS</span>
-                        </a>
-
-                        <?php if ($perm['modificar'] || $perm['eliminar']): ?>
-                            <div class="hero-menu-wrap" id="heroMenuWrap">
-                                <button type="button" class="btn-dots" id="btnHeroDots" aria-haspopup="true" aria-expanded="false" title="Más opciones de la partida">
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                                        <circle cx="12" cy="5" r="1.8"/>
-                                        <circle cx="12" cy="12" r="1.8"/>
-                                        <circle cx="12" cy="19" r="1.8"/>
-                                    </svg>
-                                </button>
-                                <div class="hero-dropdown-menu" id="heroDropdownMenu" role="menu">
-                                    <?php if ($perm['modificar']): ?>
-                                        <button type="button" class="hero-dropdown-item js-avance-partida" id="btnAvancePartida" role="menuitem">
-                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                                <line x1="18" y1="20" x2="18" y2="10"/>
-                                                <line x1="12" y1="20" x2="12" y2="4"/>
-                                                <line x1="6" y1="20" x2="6" y2="14"/>
-                                            </svg>
-                                            <span>Avance</span>
-                                        </button>
-                                        <button type="button" class="hero-dropdown-item js-editar-partida" id="btnEditarPartida" role="menuitem">
-                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                                            <span>Editar partida</span>
-                                        </button>
-                                    <?php endif; ?>
-                                    <?php if ($perm['eliminar']): ?>
-                                        <button type="button" class="hero-dropdown-item danger js-eliminar-partida" id="btnEliminarPartida" role="menuitem">
-                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                                            <span>Eliminar partida</span>
-                                        </button>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
+                        <?php if ($perm['eliminar']): ?>
+                            <button type="button" class="hero-dropdown-item danger js-eliminar-partida" id="btnEliminarPartida" role="menuitem">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                                <span>Eliminar partida</span>
+                            </button>
                         <?php endif; ?>
                     </div>
                 </div>
-
-                <div class="hero-stats">
-                    <div class="stat-item">
-                        <span class="lbl">Fecha Inicio</span>
-                        <span class="val"><?= fmt_date($partida['pdoFechaInicio']) ?></span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Fecha Fin</span>
-                        <span class="val"><?= fmt_date($partida['pdoFechaFin']) ?></span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Duración</span>
-                        <span class="val"><?= $partidaDias !== null ? "{$partidaDias} días" : 'Sin definir' ?></span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Avance Físico</span>
-                        <span class="val" id="statAvanceFisico" style="color: #2ae083;"><?= $porcentajeAvance ?>%</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Total Insumos</span>
-                        <span class="val" id="statTotalInsumos"><?= $totalInsumos ?></span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Total Fotos</span>
-                        <span class="val" id="statTotalFotos"><?= $totalFotos ?></span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="lbl">Costo Total Insumos</span>
-                        <span class="val" id="statCostoTotal">$<?= number_format($granTotalCosto, 2) ?></span>
-                    </div>
-                </div>
-            </section>
+            </div>
 
             <!-- Selector de Secciones (Insumos / Fotos) -->
             <div class="nav-section-tabs" role="tablist" aria-label="Secciones de la partida">
@@ -1576,21 +1768,22 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 <div class="section-header-row">
                     <div>
                         <h2 id="secInsumosTitle" style="font-size: 1.35rem; color: #fff; margin-bottom: .25rem;">Insumos de la Partida</h2>
-                        <p style="color: var(--muted); font-size: .88rem;">Listado de insumos asignados a esta partida y sus cantidades.</p>
+                        
                     </div>
 
-                    <div style="display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;">
+                    <div class="insumos-symbolic-actions">
                         <?php if (!empty($insumosAsignados)): ?>
-                            <div class="search-box">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                                <input type="text" class="input-control" id="searchInsumos" placeholder="Filtrar insumos..." autocomplete="off">
+                            <div class="search-discreet" id="searchInsumosWrap">
+                                <button type="button" class="btn-icon-symbolic" id="btnToggleSearchInsumos" title="Filtrar insumos" aria-label="Filtrar insumos">
+                                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                </button>
+                                <input type="text" class="search-input-minimal" id="searchInsumos" placeholder="Filtrar insumos..." aria-label="Filtrar insumos" autocomplete="off">
                             </div>
                         <?php endif; ?>
 
                         <?php if ($perm['agregar'] || $perm['modificar']): ?>
-                            <button type="button" class="btn btn-primary js-abrir-insumo" id="btnAgregarInsumo" style="width: auto; padding: .65rem 1.35rem; font-size: .88rem;">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                <span>Agregar insumo</span>
+                            <button type="button" class="btn-icon-symbolic js-abrir-insumo" id="btnAgregarInsumo" title="Agregar insumo" aria-label="Agregar insumo">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                             </button>
                         <?php endif; ?>
                     </div>
@@ -1712,41 +1905,83 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 <?php endif; ?>
             </section>
             <?php else: ?>
-            <!-- Barra Superior en Área de Fotos (Sin tarjeta de partida, solo retorno a Insumos y Tomar Foto) -->
-            <div class="photos-top-bar" aria-label="Navegación de Fotografías">
-                <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="btn-hero-white" id="btnToggleSeccion" title="Volver a los insumos de la partida">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-                        <line x1="12" y1="22.08" x2="12" y2="12"/>
-                    </svg>
-                    <span>INSUMOS</span>
-                </a>
-
-                <?php if ($perm['agregar'] || $perm['modificar']): ?>
-                    <button type="button" class="btn-camera-neon js-tomar-foto" id="btnTomarFotoTop" title="Tomar fotografía con cámara">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                            <circle cx="12" cy="13" r="4"/>
-                        </svg>
-                        <span>Tomar foto</span>
-                    </button>
-                <?php endif; ?>
-            </div>
+            <!-- Flecha fija en la esquina inferior izquierda para volver a Insumos -->
+            <a href="partida.php?id=<?= $idPartida ?>&seccion=insumos" class="btn-fixed-back" id="btnToggleSeccion" title="Volver a los insumos de la partida" aria-label="Volver a los insumos de la partida">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"/>
+                    <polyline points="12 19 5 12 12 5"/>
+                </svg>
+            </a>
 
             <!-- Sección de Fotografías -->
             <section aria-labelledby="secFotosTitle" id="secFotos">
+                <?php
+                    $conteoPorTipo = [];
+                    foreach ($fotosPartida as $fp) {
+                        $t = (int)($fp['pdfTipo'] ?? 0);
+                        $conteoPorTipo[$t] = ($conteoPorTipo[$t] ?? 0) + 1;
+                    }
+                ?>
                 <div class="section-header-row">
                     <div>
                         <h2 id="secFotosTitle" style="font-size: 1.35rem; color: #fff; margin-bottom: .25rem;">Fotografías de la Partida</h2>
                         <p style="color: var(--muted); font-size: .88rem;">Registro y evidencia visual de la partida (Antes de, Actual y Después de).</p>
                     </div>
 
-                    <div style="display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;">
-                        <?php if ($perm['agregar'] || $perm['modificar']): ?>
-                            <button type="button" class="btn btn-primary js-abrir-foto" id="btnAgregarFoto" style="width: auto; padding: .65rem 1.35rem; font-size: .88rem;">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/><line x1="12" y1="9" x2="12" y2="17"/><line x1="8" y1="13" x2="16" y2="13"/></svg>
-                                <span>Agregar foto</span>
+                    <div class="fotos-header-controls">
+                        <div class="fotos-header-top-btns">
+                            <?php if (!empty($fotosPartida)): ?>
+                                <div class="filtro-dropdown-wrap" id="filtroDropdownWrap">
+                                    <button type="button" class="btn-filtro-fotos" id="btnFiltroFotos" aria-haspopup="true" aria-expanded="false" title="Filtrar por tipo de fotografía">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                                        </svg>
+                                        <span>FILTRO</span>
+                                        <span class="filtro-active-tag" id="filtroActiveTag">Todas (<?= $totalFotos ?>)</span>
+                                        <svg class="filtro-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="6 9 12 15 18 9"/>
+                                        </svg>
+                                    </button>
+
+                                    <div class="filtro-dropdown-menu" id="filtroDropdownMenu" role="menu" aria-label="Filtrar por tipo de fotografía">
+                                        <div class="filtro-menu-header">Filtrar por tipo de fotografía</div>
+                                        <button type="button" class="filtro-menu-item active" data-filter="all" data-label="Todas (<?= $totalFotos ?>)" role="menuitem">
+                                            <span class="filtro-item-dot dot-all"></span>
+                                            <span class="filtro-item-lbl">Todas las fotografías</span>
+                                            <span class="filtro-item-count"><?= $totalFotos ?></span>
+                                        </button>
+                                        <?php foreach ($catalogoTiposFotos as $ctf):
+                                            $tipoId = (int)$ctf['pdfTipo'];
+                                            $cnt = $conteoPorTipo[$tipoId] ?? 0;
+                                        ?>
+                                            <button type="button" class="filtro-menu-item" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)" role="menuitem">
+                                                <span class="filtro-item-dot dot-tipo-<?= $tipoId ?>"></span>
+                                                <span class="filtro-item-lbl"><?= htmlspecialchars($ctf['pdftDescripcion']) ?></span>
+                                                <span class="filtro-item-count"><?= $cnt ?></span>
+                                            </button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if ($perm['agregar'] || $perm['modificar']): ?>
+                                <button type="button" class="btn btn-primary js-abrir-foto" id="btnAgregarFoto" style="width: auto; font-size: .88rem;">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/><line x1="12" y1="9" x2="12" y2="17"/><line x1="8" y1="13" x2="16" y2="13"/></svg>
+                                    <span>Agregar foto</span>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if (!empty($fotosPartida)): ?>
+                            <button type="button" class="btn-filtro-fecha" id="btnFiltroFecha" title="Filtrar fotografías por rango de fechas">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="3" y="4" width="18" height="18" rx="2"/>
+                                    <line x1="16" y1="2" x2="16" y2="6"/>
+                                    <line x1="8" y1="2" x2="8" y2="6"/>
+                                    <line x1="3" y1="10" x2="21" y2="10"/>
+                                </svg>
+                                <span>Fecha</span>
+                                <span class="fecha-active-tag" id="fechaActiveTag"></span>
                             </button>
                         <?php endif; ?>
                     </div>
@@ -1767,25 +2002,6 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                         <?php endif; ?>
                     </div>
                 <?php else: ?>
-                    <!-- Filtros por tipo de foto -->
-                    <div class="filter-pills" id="fotoFilters" role="tablist">
-                        <button type="button" class="filter-pill active" data-filter="all">Todas (<?= $totalFotos ?>)</button>
-                        <?php
-                            $conteoPorTipo = [];
-                            foreach ($fotosPartida as $fp) {
-                                $t = (int)($fp['pdfTipo'] ?? 0);
-                                $conteoPorTipo[$t] = ($conteoPorTipo[$t] ?? 0) + 1;
-                            }
-                            foreach ($catalogoTiposFotos as $ctf):
-                                $tipoId = (int)$ctf['pdfTipo'];
-                                $cnt = $conteoPorTipo[$tipoId] ?? 0;
-                        ?>
-                            <button type="button" class="filter-pill" data-filter="<?= $tipoId ?>">
-                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)
-                            </button>
-                        <?php endforeach; ?>
-                    </div>
-
                     <div class="fotos-grid" id="fotosGrid">
                         <?php foreach ($fotosPartida as $foto): 
                             $tipoId = (int)($foto['pdfTipo'] ?? 0);
@@ -1797,8 +2013,9 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                             $pesoThumbKb = !empty($foto['thumbSize']) ? round((int)$foto['thumbSize'] / 1024) : 0;
                             $fotoDesc = trim((string)($foto['pdfDescripcion'] ?? ''));
                             $fechaFotoDisplay = !empty($foto['pdfFechaFoto']) ? fmt_date($foto['pdfFechaFoto']) : fmt_date_time($foto['pdfFecha']);
+                            $fechaEfectivaIso = $foto['fechaEfectiva'] ?? '';
                         ?>
-                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-full-src="<?= $imgFullSrc ?>">
+                            <div class="foto-card" data-tipo="<?= $tipoId ?>" data-fecha="<?= htmlspecialchars($fechaEfectivaIso) ?>" data-full-src="<?= $imgFullSrc ?>">
                                 <div class="foto-thumb-wrap js-lightbox-trigger"
                                      data-src="<?= $imgFullSrc ?>"
                                      data-title="<?= htmlspecialchars($tipoDesc) ?>"
@@ -1865,10 +2082,66 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                             </div>
                         <?php endforeach; ?>
                     </div>
+                    <p class="no-results" id="noResultsFotos">No se encontraron fotografías con los filtros seleccionados.</p>
                 <?php endif; ?>
             </section>
             <?php endif; ?>
         </main>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- MODAL: FILTRAR FOTOGRAFÍAS POR RANGO DE FECHAS                            -->
+    <!-- ========================================================================= -->
+    <div class="modal-backdrop" id="modalFiltroFecha" role="dialog" aria-modal="true" aria-labelledby="modalFiltroFechaTitle">
+        <div class="modal" style="max-width: 480px; overflow: visible;">
+            <div class="modal-head">
+                <div>
+                    <h2 id="modalFiltroFechaTitle">Filtrar por fecha</h2>
+                    <p>Selecciona una fecha de inicio y una de fin para mostrar únicamente las fotografías dentro de ese rango.</p>
+                </div>
+                <button type="button" class="modal-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+
+            <div class="alert alert-error modal-error" id="modalFiltroFechaError" role="alert">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span id="modalFiltroFechaErrorText"></span>
+            </div>
+
+            <div class="form-grid">
+                <div>
+                    <label class="form-label" for="filtroFechaIniTxt">Fecha de inicio</label>
+                    <div class="date-field" id="dfFiltroIni">
+                        <input class="input-control date-text" type="text" id="filtroFechaIniTxt" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
+                        <input type="hidden" id="filtroFechaIni" value="">
+                        <button type="button" class="date-btn" aria-label="Abrir calendario de fecha de inicio" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </button>
+                        <div class="calendar"></div>
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label" for="filtroFechaFinTxt">Fecha de fin</label>
+                    <div class="date-field" id="dfFiltroFin">
+                        <input class="input-control date-text" type="text" id="filtroFechaFinTxt" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10" autocomplete="off">
+                        <input type="hidden" id="filtroFechaFin" value="">
+                        <button type="button" class="date-btn" aria-label="Abrir calendario de fecha de fin" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </button>
+                        <div class="calendar align-right"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions" style="justify-content: space-between;">
+                <button type="button" class="btn btn-ghost" id="btnLimpiarFiltroFecha" style="padding: .75rem 1.2rem;">Mostrar todas</button>
+                <div style="display: flex; gap: .6rem;">
+                    <button type="button" class="btn btn-ghost js-close" style="padding: .75rem 1.2rem;">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btnAplicarFiltroFecha" style="width: auto; padding: .75rem 1.5rem; background: #84b6f4; color: #fff; border: 1px solid #84b6f4;">Aplicar filtro</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- ========================================================================= -->
@@ -2371,6 +2644,85 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
     <?php endif; ?>
 
     <!-- ========================================================================= -->
+    <!-- MODAL: MÁS INFORMACIÓN DE LA PARTIDA (CARD MODAL)                         -->
+    <!-- ========================================================================= -->
+    <div class="modal-backdrop" id="modalInfoPartida" role="dialog" aria-modal="true" aria-labelledby="modalInfoPartidaTitle">
+        <div class="modal modal-partida-card">
+            <section class="partida-hero" aria-label="Información de la Partida">
+                <button type="button" class="modal-close modal-card-close js-close" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+                <div class="hero-top">
+                    <div class="hero-title-area">
+                        <div class="clave-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                            CLAVE: <?= htmlspecialchars($partida['pdoClave'] ?: 'S/C') ?>
+                        </div>
+                        <h2 id="modalInfoPartidaTitle" class="partida-hero-title"><?= htmlspecialchars($partida['pdoDescripcion'] ?: 'Partida sin descripción') ?></h2>
+                        <div class="partida-obra-parent">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                            <span>Obra: <strong><?= htmlspecialchars($partida['obrNombreObra']) ?></strong></span>
+                            <?php if (!empty($partida['obrContrato'])): ?>
+                                <span style="color: var(--subtle);">&bull;</span>
+                                <span>Contrato: <?= htmlspecialchars($partida['obrContrato']) ?></span>
+                            <?php endif; ?>
+                            <?php if (!empty($partida['obrUbicacion'])): ?>
+                                <span style="color: var(--subtle);">&bull;</span>
+                                <span><?= htmlspecialchars($partida['obrUbicacion']) ?></span>
+                            <?php endif; ?>
+                        </div>
+
+                        <!-- Barra Porcentual de Avance (Diseño Cápsula Neón) -->
+                        <div class="partida-progress-container" aria-label="Avance físico de la partida: <?= $porcentajeAvance ?>%">
+                            <div class="progress-pill-track" id="partidaProgressTrack" role="progressbar" aria-valuenow="<?= $porcentajeAvance ?>" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-pill-fill" id="partidaProgressFill" style="width: <?= $porcentajeAvance ?>%;">
+                                    <?php if ($porcentajeAvance >= 14): ?>
+                                        <span class="progress-pill-text in-fill"><?= $porcentajeAvance ?>%</span>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if ($porcentajeAvance < 14): ?>
+                                    <span class="progress-pill-text outside-fill"><?= $porcentajeAvance ?>%</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <span class="lbl">Fecha Inicio</span>
+                        <span class="val"><?= fmt_date($partida['pdoFechaInicio']) ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Fecha Fin</span>
+                        <span class="val"><?= fmt_date($partida['pdoFechaFin']) ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Duración</span>
+                        <span class="val"><?= $partidaDias !== null ? "{$partidaDias} días" : 'Sin definir' ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Avance Físico</span>
+                        <span class="val" id="statAvanceFisico" style="color: #2ae083;"><?= $porcentajeAvance ?>%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Total Insumos</span>
+                        <span class="val" id="statTotalInsumos"><?= $totalInsumos ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Total Fotos</span>
+                        <span class="val" id="statTotalFotos"><?= $totalFotos ?></span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="lbl">Costo Total Insumos</span>
+                        <span class="val" id="statCostoTotal">$<?= number_format($granTotalCosto, 2) ?></span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ========================================================================= -->
     <!-- MODAL: LIGHTBOX / PANTALLA COMPLETA DE FOTO                               -->
     <!-- ========================================================================= -->
     <div class="lightbox-modal" id="modalLightbox" role="dialog" aria-modal="true" aria-label="Visualizador de Fotografía">
@@ -2569,8 +2921,10 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
         }
         document.addEventListener('click', () => closeAllCalendars());
 
-        // ---------------- Filtro en vivo de Insumos ----------------
+        // ---------------- Filtro en vivo de Insumos (Lupa simbólica) ----------------
         const searchInput = document.getElementById('searchInsumos');
+        const searchInsumosWrap = document.getElementById('searchInsumosWrap');
+        const btnToggleSearchInsumos = document.getElementById('btnToggleSearchInsumos');
         const rows = document.querySelectorAll('#tablaInsumos tbody tr');
         const noResults = document.getElementById('noResultsInsumos');
         const totalFooter = document.getElementById('totalCostosInsumos');
@@ -2594,6 +2948,34 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                 if (tfoot) tfoot.style.display = visible === 0 ? 'none' : '';
                 if (totalFooter) totalFooter.textContent = fmtMoney(visibleTotal);
             });
+
+            if (btnToggleSearchInsumos && searchInsumosWrap) {
+                btnToggleSearchInsumos.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = searchInsumosWrap.classList.toggle('is-open');
+                    if (open) {
+                        setTimeout(() => searchInput.focus(), 50);
+                    } else if (searchInput.value !== '') {
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input'));
+                    }
+                });
+
+                searchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input'));
+                        searchInsumosWrap.classList.remove('is-open');
+                        searchInput.blur();
+                    }
+                });
+
+                document.addEventListener('click', (e) => {
+                    if (!searchInsumosWrap.contains(e.target) && !searchInput.value.trim()) {
+                        searchInsumosWrap.classList.remove('is-open');
+                    }
+                });
+            }
         }
 
         // ---------------- Modal: Agregar Insumo (Tabs Existente / Nuevo) ----------------
@@ -2808,9 +3190,12 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             btnElimPartida.addEventListener('click', () => openModal(modalEliminarPartida));
         }
 
-        // ---------------- Menú 3 puntos de Partida ----------------
+        // ---------------- Menú 3 puntos de Partida y Modal Más Información ----------------
         const btnHeroDots = document.getElementById('btnHeroDots');
         const heroDropdownMenu = document.getElementById('heroDropdownMenu');
+        const btnMasInfoPartida = document.getElementById('btnMasInfoPartida');
+        const modalInfoPartida = document.getElementById('modalInfoPartida');
+
         if (btnHeroDots && heroDropdownMenu) {
             btnHeroDots.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -2831,6 +3216,38 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
                     btnHeroDots.setAttribute('aria-expanded', 'false');
                 });
             });
+        }
+
+        if (btnMasInfoPartida && modalInfoPartida) {
+            btnMasInfoPartida.addEventListener('click', () => {
+                openModal(modalInfoPartida);
+            });
+        }
+
+        // Efecto visual al quedar pegado (sticky) en el tope superior (Escritorio y Celular)
+        const stickyPartidaHeader = document.getElementById('stickyPartidaHeader');
+        const stickyPartidaPlaceholder = document.getElementById('stickyPartidaPlaceholder');
+        if (stickyPartidaHeader && stickyPartidaPlaceholder) {
+            const updateStickyState = () => {
+                const phRect = stickyPartidaPlaceholder.getBoundingClientRect();
+                const shouldStick = phRect.top <= 0;
+                if (shouldStick) {
+                    if (!stickyPartidaHeader.classList.contains('is-stuck')) {
+                        stickyPartidaPlaceholder.style.height = stickyPartidaHeader.offsetHeight + 'px';
+                        stickyPartidaHeader.classList.add('is-stuck');
+                    }
+                } else {
+                    if (stickyPartidaHeader.classList.contains('is-stuck')) {
+                        stickyPartidaHeader.classList.remove('is-stuck');
+                        stickyPartidaPlaceholder.style.height = '';
+                    }
+                }
+            };
+            window.addEventListener('scroll', updateStickyState, { passive: true });
+            document.addEventListener('scroll', updateStickyState, { passive: true, capture: true });
+            window.addEventListener('touchmove', updateStickyState, { passive: true });
+            window.addEventListener('resize', updateStickyState, { passive: true });
+            updateStickyState();
         }
 
         // ---------------- Modal: Avance de la Partida ----------------
@@ -3286,24 +3703,152 @@ $porcentajeAvance = max(0, min(100, $porcentajeAvance));
             });
         }
 
-        // 5. Filtros de Fotos (Todas, Antes de, Actual, Después de)
-        const filterPills = document.querySelectorAll('#fotoFilters .filter-pill');
+        // 5. Filtros de Fotos: Menú FILTRO (por tipo) y Botón Fecha (#84b6f4)
+        const btnFiltroFotos = document.getElementById('btnFiltroFotos');
+        const filtroDropdownMenu = document.getElementById('filtroDropdownMenu');
+        const filtroActiveTag = document.getElementById('filtroActiveTag');
+        const menuItems = document.querySelectorAll('#filtroDropdownMenu .filtro-menu-item');
         const fotoCards = document.querySelectorAll('#fotosGrid .foto-card');
-        if (filterPills.length > 0 && fotoCards.length > 0) {
-            filterPills.forEach(pill => {
-                pill.addEventListener('click', () => {
-                    filterPills.forEach(p => p.classList.remove('active'));
-                    pill.classList.add('active');
-                    const fil = pill.dataset.filter;
-                    fotoCards.forEach(card => {
-                        if (fil === 'all' || card.dataset.tipo === fil) {
-                            card.style.display = 'flex';
-                        } else {
-                            card.style.display = 'none';
-                        }
-                    });
+        const noResultsFotos = document.getElementById('noResultsFotos');
+
+        let currentTypeFilter = 'all';
+        let currentFechaIni = '';
+        let currentFechaFin = '';
+
+        function updateFotosVisibility() {
+            let visibles = 0;
+            fotoCards.forEach(card => {
+                const matchTipo = (currentTypeFilter === 'all' || card.dataset.tipo === currentTypeFilter);
+                const f = card.dataset.fecha || '';
+                const matchIni = (!currentFechaIni || (f && f >= currentFechaIni));
+                const matchFin = (!currentFechaFin || (f && f <= currentFechaFin));
+                const show = matchTipo && matchIni && matchFin;
+                card.style.display = show ? 'flex' : 'none';
+                if (show) visibles++;
+            });
+            if (noResultsFotos) {
+                noResultsFotos.style.display = visibles > 0 ? 'none' : 'block';
+            }
+        }
+
+        function applyPhotoFilter(filterVal, labelTxt) {
+            currentTypeFilter = filterVal;
+            menuItems.forEach(item => {
+                item.classList.toggle('active', item.dataset.filter === filterVal);
+            });
+            if (filtroActiveTag && labelTxt) {
+                filtroActiveTag.textContent = labelTxt;
+            }
+            updateFotosVisibility();
+        }
+
+        if (btnFiltroFotos && filtroDropdownMenu) {
+            btnFiltroFotos.addEventListener('click', e => {
+                e.stopPropagation();
+                const isOpen = filtroDropdownMenu.classList.toggle('open');
+                btnFiltroFotos.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            });
+
+            document.addEventListener('click', e => {
+                if (!filtroDropdownMenu.contains(e.target) && e.target !== btnFiltroFotos) {
+                    filtroDropdownMenu.classList.remove('open');
+                    btnFiltroFotos.setAttribute('aria-expanded', 'false');
+                }
+            });
+
+            menuItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    applyPhotoFilter(item.dataset.filter, item.dataset.label);
+                    filtroDropdownMenu.classList.remove('open');
+                    btnFiltroFotos.setAttribute('aria-expanded', 'false');
                 });
             });
+        }
+
+        const btnFiltroFecha = document.getElementById('btnFiltroFecha');
+        const modalFiltroFecha = document.getElementById('modalFiltroFecha');
+        const fechaActiveTag = document.getElementById('fechaActiveTag');
+        if (btnFiltroFecha && modalFiltroFecha) {
+            const dfIni = document.getElementById('dfFiltroIni');
+            const dfFin = document.getElementById('dfFiltroFin');
+            const dpFiltroIni = dfIni ? DatePicker(dfIni) : null;
+            const dpFiltroFin = dfFin ? DatePicker(dfFin) : null;
+            const errFechaBox = document.getElementById('modalFiltroFechaError');
+            const errFechaTxt = document.getElementById('modalFiltroFechaErrorText');
+            const btnAplicarFecha = document.getElementById('btnAplicarFiltroFecha');
+            const btnLimpiarFecha = document.getElementById('btnLimpiarFiltroFecha');
+
+            if (dpFiltroIni && dpFiltroFin) {
+                dpFiltroIni.rangeOther = () => dpFiltroFin.get();
+                dpFiltroFin.rangeOther = () => dpFiltroIni.get();
+                dpFiltroIni.onChange = () => { dpFiltroFin.min = dpFiltroIni.get() || null; };
+                dpFiltroFin.onChange = () => { dpFiltroIni.max = dpFiltroFin.get() || null; };
+            }
+
+            btnFiltroFecha.addEventListener('click', () => {
+                if (errFechaBox) errFechaBox.classList.remove('show');
+                if (dpFiltroIni) dpFiltroIni.set(currentFechaIni, true);
+                if (dpFiltroFin) dpFiltroFin.set(currentFechaFin, true);
+                openModal(modalFiltroFecha);
+            });
+
+            if (btnAplicarFecha) {
+                btnAplicarFecha.addEventListener('click', () => {
+                    if (errFechaBox) errFechaBox.classList.remove('show');
+                    const ini = dpFiltroIni ? dpFiltroIni.get() : '';
+                    const fin = dpFiltroFin ? dpFiltroFin.get() : '';
+                    const txtIni = dpFiltroIni ? dpFiltroIni.txt.value.trim() : '';
+                    const txtFin = dpFiltroFin ? dpFiltroFin.txt.value.trim() : '';
+
+                    if ((txtIni && !ini) || (txtFin && !fin)) {
+                        if (errFechaTxt) errFechaTxt.textContent = 'Revisa el formato de las fechas (dd/mm/aaaa).';
+                        if (errFechaBox) errFechaBox.classList.add('show');
+                        return;
+                    }
+                    if (ini && fin && fin < ini) {
+                        if (errFechaTxt) errFechaTxt.textContent = 'La fecha de fin no puede ser anterior a la fecha de inicio.';
+                        if (errFechaBox) errFechaBox.classList.add('show');
+                        return;
+                    }
+
+                    currentFechaIni = ini || '';
+                    currentFechaFin = fin || '';
+
+                    if (fechaActiveTag) {
+                        if (currentFechaIni && currentFechaFin) {
+                            fechaActiveTag.textContent = `${isoToTxt(currentFechaIni)} - ${isoToTxt(currentFechaFin)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else if (currentFechaIni) {
+                            fechaActiveTag.textContent = `Desde ${isoToTxt(currentFechaIni)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else if (currentFechaFin) {
+                            fechaActiveTag.textContent = `Hasta ${isoToTxt(currentFechaFin)}`;
+                            fechaActiveTag.classList.add('show');
+                        } else {
+                            fechaActiveTag.textContent = '';
+                            fechaActiveTag.classList.remove('show');
+                        }
+                    }
+
+                    updateFotosVisibility();
+                    closeModal(modalFiltroFecha);
+                });
+            }
+
+            if (btnLimpiarFecha) {
+                btnLimpiarFecha.addEventListener('click', () => {
+                    currentFechaIni = '';
+                    currentFechaFin = '';
+                    if (dpFiltroIni) { dpFiltroIni.set('', true); dpFiltroIni.max = null; }
+                    if (dpFiltroFin) { dpFiltroFin.set('', true); dpFiltroFin.min = null; }
+                    if (fechaActiveTag) {
+                        fechaActiveTag.textContent = '';
+                        fechaActiveTag.classList.remove('show');
+                    }
+                    updateFotosVisibility();
+                    closeModal(modalFiltroFecha);
+                });
+            }
         }
 
         // 6. Lightbox / Pantalla Completa
