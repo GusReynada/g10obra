@@ -446,6 +446,13 @@ $csrf = csrf_token();
         .filtro-item-dot.dot-tipo-1 { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,.6); }
         .filtro-item-dot.dot-tipo-2 { background: #34d399; box-shadow: 0 0 6px rgba(52,211,153,.6); }
         .filtro-item-dot.dot-tipo-3 { background: #c084fc; box-shadow: 0 0 6px rgba(192,132,252,.6); }
+        .filtro-item-dot.dot-tipo-4 { background: #38bdf8; box-shadow: 0 0 6px rgba(56,189,248,.6); }
+        .filtro-item-dot.dot-tipo-5 { background: #fbbf24; box-shadow: 0 0 6px rgba(251,191,36,.6); }
+        .filtro-item-dot.dot-tipo-6 { background: #a3e635; box-shadow: 0 0 6px rgba(163,230,53,.6); }
+        .filtro-item-dot.dot-tipo-7 { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,.6); }
+        .filtro-item-dot.dot-tipo-8 { background: #fb923c; box-shadow: 0 0 6px rgba(251,146,60,.6); }
+        .filtro-item-dot.dot-tipo-9 { background: #f472b6; box-shadow: 0 0 6px rgba(244,114,182,.6); }
+        .filtro-item-dot.dot-tipo-10 { background: #94a3b8; box-shadow: 0 0 6px rgba(148,163,184,.6); }
         .filtro-item-lbl { flex: 1; }
         .filtro-item-count {
             font-size: .72rem; font-weight: 700; padding: .1rem .48rem;
@@ -519,6 +526,13 @@ $csrf = csrf_token();
         .badge-tipo-1 { background: rgba(59, 130, 246, .15); color: #93c5fd; border-color: rgba(59, 130, 246, .35); }
         .badge-tipo-2 { background: rgba(16, 185, 129, .15); color: #6ee7b7; border-color: rgba(16, 185, 129, .35); }
         .badge-tipo-3 { background: rgba(168, 85, 247, .15); color: #d8b4fe; border-color: rgba(168, 85, 247, .35); }
+        .badge-tipo-4 { background: rgba(14, 165, 233, .15); color: #7dd3fc; border-color: rgba(14, 165, 233, .35); }
+        .badge-tipo-5 { background: rgba(245, 158, 11, .15); color: #fcd34d; border-color: rgba(245, 158, 11, .35); }
+        .badge-tipo-6 { background: rgba(132, 204, 22, .15); color: #bef264; border-color: rgba(132, 204, 22, .35); }
+        .badge-tipo-7 { background: rgba(239, 68, 68, .15); color: #fca5a5; border-color: rgba(239, 68, 68, .35); }
+        .badge-tipo-8 { background: rgba(249, 115, 22, .15); color: #fdba74; border-color: rgba(249, 115, 22, .35); }
+        .badge-tipo-9 { background: rgba(236, 72, 153, .15); color: #f9a8d4; border-color: rgba(236, 72, 153, .35); }
+        .badge-tipo-10 { background: rgba(148, 163, 184, .15); color: #cbd5e1; border-color: rgba(148, 163, 184, .35); }
         .foto-partida-tag {
             display: inline-flex; align-items: center; gap: .4rem;
             font-size: .76rem; color: #d4d4d8;
@@ -1114,19 +1128,6 @@ $csrf = csrf_token();
                         </a>
                     </div>
                 <?php else: ?>
-                    <!-- Píldoras rápidas sincronizadas con el botón FILTRO -->
-                    <div class="filter-pills" id="fotoFilters" role="tablist">
-                        <button type="button" class="filter-pill active" data-filter="all" data-label="Todas (<?= $totalFotosObra ?>)">Todas (<?= $totalFotosObra ?>)</button>
-                        <?php foreach ($catalogoTiposFotos as $ctf):
-                            $tipoId = (int)$ctf['pdfTipo'];
-                            $cnt = $conteoPorTipo[$tipoId] ?? 0;
-                        ?>
-                            <button type="button" class="filter-pill" data-filter="<?= $tipoId ?>" data-label="<?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)">
-                                <?= htmlspecialchars($ctf['pdftDescripcion']) ?> (<?= $cnt ?>)
-                            </button>
-                        <?php endforeach; ?>
-                    </div>
-
                     <div class="fotos-grid" id="fotosGrid">
                         <?php foreach ($fotosObra as $foto):
                             $tipoId = (int)($foto['pdfTipo'] ?? 0);
